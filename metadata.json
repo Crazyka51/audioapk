@@ -1,0 +1,6 @@
+{
+  "name": "AudioDetective Pro",
+  "description": "Forensic audio analysis, whisper isolation, spectrogram heatmaps, DSP filtering, and speech enhancement.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
