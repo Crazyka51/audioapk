@@ -63,6 +63,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.model.AudioFileItem
 import com.example.model.DspConfig
 import com.example.ui.components.AbLoopController
+import com.example.ui.components.AdaptiveLmsCard
+import com.example.ui.components.CepstralDeverbCard
 import com.example.ui.components.ReferenceSubtractionCard
 import com.example.ui.components.SpectrogramCanvas
 import com.example.ui.components.VoiceSeparationCard
@@ -432,6 +434,28 @@ fun StudioScreen(
                     onStrengthChange = { viewModel.setVoiceSeparationStrength(it) },
                     onFormantBoostChange = { viewModel.setVocalFormantBoost(it) },
                     onSeparateAndSave = { viewModel.separateVoiceAndSave() }
+                )
+
+                // Adaptive LMS Filter (Dynamic Traffic, Dogs, Non-Stationary Noise)
+                val lmsMetrics by viewModel.lmsMetrics.collectAsStateWithLifecycle()
+                AdaptiveLmsCard(
+                    dspConfig = dspConfig,
+                    metrics = lmsMetrics,
+                    onToggleEnabled = { viewModel.toggleAdaptiveLms(it) },
+                    onIntensityChange = { viewModel.setAdaptiveLmsIntensity(it) },
+                    onSpeechPreserveChange = { viewModel.setAdaptiveLmsSpeechPreserve(it) },
+                    onApplyAndSave = { viewModel.applyAdaptiveLmsAndSave() }
+                )
+
+                // Cepstral De-reverberation (Inverse Room Comb Filter for Empty Room / Bathroom Echo)
+                val reverbMetrics by viewModel.reverbMetrics.collectAsStateWithLifecycle()
+                CepstralDeverbCard(
+                    dspConfig = dspConfig,
+                    metrics = reverbMetrics,
+                    onToggleEnabled = { viewModel.toggleDeverb(it) },
+                    onStrengthChange = { viewModel.setDeverbStrength(it) },
+                    onManualDelayChange = { viewModel.setDeverbManualDelay(it) },
+                    onApplyAndSave = { viewModel.applyDeverbAndSave() }
                 )
 
                 // Quick Forensic Filter Toggles

@@ -188,4 +188,92 @@ object SyntheticAudioGenerator {
         }
         WavHelper.writeWav(file, samples, sampleRate, 1)
     }
+
+    /**
+     * Generates a forensic scenario of an interrogation or wiretap inside an empty, tiled room / bathroom
+     * with heavy reverberation (flutter echo and smearing of vocal sibilants).
+     * Ideal test case for CepstralDeverbProcessor.
+     */
+    fun generateBathroomEchoCase(file: File, sampleRate: Int = 44100, durationSec: Float = 11.0f) {
+        val totalSamples = (sampleRate * durationSec).toInt()
+        val drySamples = FloatArray(totalSamples)
+        val wetSamples = FloatArray(totalSamples)
+        val random = Random(777)
+
+        // 1. Dry speech synthesis with sharp sibilants and clear syllables
+        for (i in 0 until totalSamples) {
+            val t = i.toFloat() / sampleRate
+            if ((t in 1.2..4.8) || (t in 6.0..10.0)) {
+                val syllableEnv = (0.5f + 0.5f * sin(2.0 * PI * 3.8 * t).toFloat())
+                val f0 = sin(2.0 * PI * 135.0 * t).toFloat() * 0.35f
+                val f1 = sin(2.0 * PI * 720.0 * t).toFloat() * 0.40f
+                val f2 = sin(2.0 * PI * 1750.0 * t).toFloat() * 0.30f
+                val f3 = sin(2.0 * PI * 2850.0 * t).toFloat() * 0.20f
+                // Sibilant hiss ("s", "sh", "ch")
+                val sibilantBurst = if (((t * 4f).toInt() % 3) == 0) (random.nextFloat() * 2f - 1f) * 0.35f else 0f
+                drySamples[i] = (f0 + f1 + f2 + f3 + sibilantBurst) * syllableEnv * 0.28f
+            }
+        }
+
+        // 2. Convolution with strong acoustic multipath reflections (tiled bathroom echo at ~28ms and ~56ms)
+        val delay1 = (0.028f * sampleRate).toInt()
+        val delay2 = (0.056f * sampleRate).toInt()
+        val delay3 = (0.092f * sampleRate).toInt()
+        val g1 = 0.62f
+        val g2 = 0.38f
+        val g3 = 0.22f
+
+        for (i in 0 until totalSamples) {
+            val dry = drySamples[i]
+            val echo1 = if (i >= delay1) drySamples[i - delay1] * g1 else 0f
+            val echo2 = if (i >= delay2) drySamples[i - delay2] * g2 else 0f
+            val echo3 = if (i >= delay3) drySamples[i - delay3] * g3 else 0f
+            val roomNoise = (random.nextFloat() * 2f - 1f) * 0.015f
+            wetSamples[i] = (dry + echo1 + echo2 + echo3 + roomNoise).coerceIn(-1.0f, 1.0f)
+        }
+
+        WavHelper.writeWav(file, wetSamples, sampleRate, 1)
+    }
+
+    /**
+     * Generates a forensic street / vehicle wiretap where non-stationary dynamic noise
+     * (passing cars, doppler pitch sweep, honking, and sudden barking) masks speech.
+     * Ideal test case for AdaptiveLmsFilter.
+     */
+    fun generateDynamicTrafficNoiseCase(file: File, sampleRate: Int = 44100, durationSec: Float = 12.0f) {
+        val totalSamples = (sampleRate * durationSec).toInt()
+        val samples = FloatArray(totalSamples)
+        val random = Random(888)
+
+        for (i in 0 until totalSamples) {
+            val t = i.toFloat() / sampleRate
+
+            // 1. Dynamic non-stationary traffic whoosh with accelerating pitch sweep
+            val speedMod = 1.0f + 0.6f * sin(2.0 * PI * 0.25 * t).toFloat()
+            val engineFreq = 85.0f * speedMod
+            val engineDrone = sin(2.0 * PI * engineFreq * t).toFloat() * 0.28f
+            val exhaustRumble = sin(2.0 * PI * (engineFreq * 1.5f) * t).toFloat() * 0.18f
+
+            // Dynamic tire friction whoosh modulated in volume
+            val whooshVolume = (0.4f + 0.4f * sin(2.0 * PI * 0.3 * t).toFloat()).coerceIn(0.1f, 0.8f)
+            val tireNoise = (random.nextFloat() * 2f - 1f) * whooshVolume * 0.16f
+
+            // Sudden transient horn/bark at intervals
+            val horn = if (t in 4.5..5.2) sin(2.0 * PI * 440.0 * t).toFloat() * 0.32f else 0f
+
+            // 2. Target human speech buried under fluctuating street noise
+            var targetSpeech = 0f
+            if ((t in 1.8..4.2) || (t in 5.8..10.5)) {
+                val syllableEnv = (0.5f + 0.5f * sin(2.0 * PI * 3.4 * t).toFloat())
+                val f1 = sin(2.0 * PI * 650.0 * t).toFloat() * 0.38f
+                val f2 = sin(2.0 * PI * 1550.0 * t).toFloat() * 0.32f
+                val f3 = sin(2.0 * PI * 2600.0 * t).toFloat() * 0.22f
+                targetSpeech = (f1 + f2 + f3) * syllableEnv * 0.22f
+            }
+
+            samples[i] = (engineDrone + exhaustRumble + tireNoise + horn + targetSpeech).coerceIn(-1.0f, 1.0f)
+        }
+
+        WavHelper.writeWav(file, samples, sampleRate, 1)
+    }
 }

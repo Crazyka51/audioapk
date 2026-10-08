@@ -3,8 +3,10 @@ package com.example.data
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.example.dsp.AdaptiveLmsFilter
 import com.example.dsp.AudioDecoder
 import com.example.dsp.BiquadFilter
+import com.example.dsp.CepstralDeverbProcessor
 import com.example.dsp.FilterType
 import com.example.dsp.LearnedSpectralProfile
 import com.example.dsp.ReferenceAudioCanceller
@@ -180,6 +182,28 @@ class AudioDetectiveRepository(private val context: Context) {
             val noiseGate = SpectralNoiseGate(fftSize = 1024, hopSize = 256, sampleRate = rawData.sampleRate)
             samples = noiseGate.process(samples, config.noiseReductionLevel)
             appliedFilters.add("Spectral Noise Gate (${(config.noiseReductionLevel * 100).toInt()}%)")
+        }
+
+        // 3B. Adaptive LMS Filter (Dynamic Non-Stationary Noise, traffic, barking)
+        if (config.adaptiveLmsEnabled) {
+            val lmsFilter = AdaptiveLmsFilter()
+            samples = lmsFilter.process(
+                samples = samples,
+                filterIntensity = config.adaptiveLmsIntensity,
+                speechPreservation = config.adaptiveLmsSpeechPreserve
+            )
+            appliedFilters.add("Adaptive LMS Filter (${(config.adaptiveLmsIntensity * 100).toInt()}%)")
+        }
+
+        // 3C. Cepstral De-reverberation (Inverse Comb Filter for empty room / bathroom echo)
+        if (config.deverbEnabled) {
+            val deverbProcessor = CepstralDeverbProcessor(fftSize = 2048, sampleRate = rawData.sampleRate)
+            samples = deverbProcessor.process(
+                samples = samples,
+                deverbStrength = config.deverbStrength,
+                manualDelayMs = config.deverbManualDelayMs
+            )
+            appliedFilters.add("Cepstral De-reverberation (${(config.deverbStrength * 100).toInt()}%)")
         }
 
         // 4. Whisper Dynamic Boost
@@ -463,6 +487,16 @@ class AudioDetectiveRepository(private val context: Context) {
         val file6 = File(recordingsDir, "Known_Radio_Song_Reference.wav")
         if (!file6.exists()) {
             SyntheticAudioGenerator.generateKnownSongReference(file6, 44100, 12.0f)
+        }
+
+        val file7 = File(recordingsDir, "Bathroom_Tiles_Echo_Case.wav")
+        if (!file7.exists()) {
+            SyntheticAudioGenerator.generateBathroomEchoCase(file7, 44100, 11.0f)
+        }
+
+        val file8 = File(recordingsDir, "Street_Traffic_Dynamic_Noise.wav")
+        if (!file8.exists()) {
+            SyntheticAudioGenerator.generateDynamicTrafficNoiseCase(file8, 44100, 12.0f)
         }
     }
 }

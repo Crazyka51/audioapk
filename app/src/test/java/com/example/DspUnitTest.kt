@@ -1,6 +1,8 @@
 package com.example
 
+import com.example.dsp.AdaptiveLmsFilter
 import com.example.dsp.BiquadFilter
+import com.example.dsp.CepstralDeverbProcessor
 import com.example.dsp.FftProcessor
 import com.example.dsp.FilterType
 import com.example.dsp.ReferenceAudioCanceller
@@ -169,6 +171,93 @@ class DspUnitTest {
         assertTrue(
             "Voice formant (1650 Hz) should remain preserved and audible (got: $voiceDbAfter dB)",
             voiceDbAfter > -50.0f
+        )
+    }
+
+    @Test
+    fun testCepstralDeverbProcessor_detectsAndDriesEcho() {
+        val sampleRate = 44100
+        val processor = CepstralDeverbProcessor(fftSize = 2048, sampleRate = sampleRate)
+
+        // Synthesize test pulse/speech with an acoustic reflection at 25 ms (~1102 samples)
+        val delaySamples = (sampleRate * 0.025f).toInt()
+        val echoGain = 0.65f
+        val numSamples = 8192
+        val input = FloatArray(numSamples)
+
+        // Multiple sharp vocal transients
+        for (burst in listOf(500, 2500, 4500, 6500)) {
+            for (i in 0 until 120) {
+                val t = i.toFloat() / sampleRate
+                val dry = (0.5f * sin(2.0 * PI * 800.0 * t)).toFloat()
+                input[burst + i] += dry
+                // Add multipath echo
+                input[burst + i + delaySamples] += dry * echoGain
+            }
+        }
+
+        // 1. Analyze quefrency cepstrum
+        val metrics = processor.analyzeReverberation(input)
+        assertNotNull(metrics)
+        assertTrue(
+            "Detected echo delay should be close to 25 ms (got ${metrics.detectedDelayMs} ms)",
+            Math.abs(metrics.detectedDelayMs - 25.0f) < 8.0f
+        )
+
+        // 2. Process through inverse comb dereverberator
+        val dried = processor.process(input, deverbStrength = 0.85f, manualDelayMs = 25.0f)
+        assertEquals(input.size, dried.size)
+
+        // 3. Verify echo suppression at the reflection tail position
+        val echoSampleIndex = 500 + delaySamples + 40
+        val originalEchoVal = Math.abs(input[echoSampleIndex])
+        val driedEchoVal = Math.abs(dried[echoSampleIndex])
+
+        assertTrue(
+            "Reflection amplitude should be attenuated by inverse comb filter (original: $originalEchoVal, dried: $driedEchoVal)",
+            driedEchoVal < originalEchoVal * 0.80f
+        )
+    }
+
+    @Test
+    fun testAdaptiveLmsFilter_attenuatesDynamicNoise() {
+        val sampleRate = 44100
+        val lms = AdaptiveLmsFilter(filterOrder = 48, delayLineSamples = 64, learningRate = 0.05f)
+
+        val n = 12000
+        val mixed = FloatArray(n)
+        val speechOnly = FloatArray(n)
+
+        for (i in 0 until n) {
+            val t = i.toFloat() / sampleRate
+            // Dynamic noise: varying frequency street drone / car acceleration
+            val noiseFreq = 120.0 + 40.0 * sin(2.0 * PI * 1.5 * t)
+            val noise = 0.40f * sin(2.0 * PI * noiseFreq * t).toFloat()
+
+            // Forensic speech formant (1200 Hz) present in second half
+            val speech = if (i > 6000) 0.25f * sin(2.0 * PI * 1200.0 * t).toFloat() else 0f
+
+            speechOnly[i] = speech
+            mixed[i] = noise + speech
+        }
+
+        val filtered = lms.process(mixed, filterIntensity = 0.85f, speechPreservation = 0.70f)
+        assertEquals(n, filtered.size)
+
+        val metrics = lms.evaluateMetrics(mixed, filtered)
+        assertNotNull(metrics)
+
+        // Check noise attenuation in first half (noise-only segment where LMS adapts)
+        var rawEnergy = 0.0
+        var filteredEnergy = 0.0
+        for (i in 2000 until 5000) {
+            rawEnergy += mixed[i] * mixed[i]
+            filteredEnergy += filtered[i] * filtered[i]
+        }
+
+        assertTrue(
+            "Adaptive LMS should significantly attenuate correlated dynamic noise (raw: $rawEnergy, filtered: $filteredEnergy)",
+            filteredEnergy < rawEnergy * 0.70f
         )
     }
 }

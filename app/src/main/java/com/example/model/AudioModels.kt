@@ -66,6 +66,16 @@ data class DspConfig(
     val voiceSeparationMode: VoiceSeparationMode = VoiceSeparationMode.ISOLATE_VOICE,
     val voiceSeparationStrength: Float = 0.85f, // 0.1 to 1.0
     val vocalFormantBoostDb: Float = 8.0f, // 0 to +18 dB
+
+    // Cepstral De-reverberation (Inverse Comb Filter for empty room / bathroom echo)
+    val deverbEnabled: Boolean = false,
+    val deverbStrength: Float = 0.75f, // 0.0 to 1.0
+    val deverbManualDelayMs: Float = 0.0f, // 0.0 = auto-detect via Cepstrum
+
+    // Adaptive LMS Filter (Dynamic Non-Stationary Noise, traffic, barking)
+    val adaptiveLmsEnabled: Boolean = false,
+    val adaptiveLmsIntensity: Float = 0.80f, // 0.0 to 1.0
+    val adaptiveLmsSpeechPreserve: Float = 0.70f, // 0.0 to 1.0
     
     val playbackSpeed: Float = 1.0f, // 0.5x to 1.5x
     val pitchCorrectionEnabled: Boolean = true,

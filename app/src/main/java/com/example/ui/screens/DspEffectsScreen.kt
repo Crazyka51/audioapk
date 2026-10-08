@@ -47,6 +47,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.model.DspConfig
+import com.example.ui.components.AdaptiveLmsCard
+import com.example.ui.components.CepstralDeverbCard
 import com.example.ui.components.ReferenceSubtractionCard
 import com.example.ui.components.VoiceSeparationCard
 import com.example.ui.theme.ForensicCyan
@@ -74,6 +76,8 @@ fun DspEffectsScreen(
     val refMatchGain by viewModel.referenceMatchGain.collectAsStateWithLifecycle()
     val refOffsetMs by viewModel.referenceOffsetMs.collectAsStateWithLifecycle()
     val protectFormants by viewModel.protectVoiceFormants.collectAsStateWithLifecycle()
+    val reverbMetrics by viewModel.reverbMetrics.collectAsStateWithLifecycle()
+    val lmsMetrics by viewModel.lmsMetrics.collectAsStateWithLifecycle()
 
     Box(
         modifier = modifier
@@ -310,6 +314,26 @@ fun DspEffectsScreen(
                     )
                 }
             }
+
+            // 4B. Adaptive LMS Filter (Dynamic Traffic, Dogs, Non-Stationary Noise)
+            AdaptiveLmsCard(
+                dspConfig = dspConfig,
+                metrics = lmsMetrics,
+                onToggleEnabled = { viewModel.toggleAdaptiveLms(it) },
+                onIntensityChange = { viewModel.setAdaptiveLmsIntensity(it) },
+                onSpeechPreserveChange = { viewModel.setAdaptiveLmsSpeechPreserve(it) },
+                onApplyAndSave = { viewModel.applyAdaptiveLmsAndSave() }
+            )
+
+            // 4C. Cepstral De-reverberation (Inverse Room Comb Filter for Empty Room / Bathroom Echo)
+            CepstralDeverbCard(
+                dspConfig = dspConfig,
+                metrics = reverbMetrics,
+                onToggleEnabled = { viewModel.toggleDeverb(it) },
+                onStrengthChange = { viewModel.setDeverbStrength(it) },
+                onManualDelayChange = { viewModel.setDeverbManualDelay(it) },
+                onApplyAndSave = { viewModel.applyDeverbAndSave() }
+            )
 
             // 5. Pitch-Preserved Time Stretch
             FilterCard(

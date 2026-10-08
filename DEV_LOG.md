@@ -76,6 +76,21 @@ Implementován forenzní systém pro situace, kdy na dlouhém záznamu hraje v p
    - Kombinuje dynamické časově synchronizované STFT rámce referenční skladby s naučeným spektrálním otiskem a adaptivním měřítkem hlasitosti místnosti (*Gain Match*).
    - **Ochrana řečových formantů (300–3400 Hz)**: Chrání tranzienty lidského hlasu, aby po odečtení hudby zůstala řeč čitelná a srozumitelná, a uloží vyčištěnou stopu (`_SongRemoved.wav` / `_ProfileCleaned.wav`).
 
+### 🔹 Fáze 8: Extrémní forenzní filtrace – De-reverberace a Adaptivní LMS filtr (Sprint 8)
+Implementovány dva pokročilé algoritmy pro extrémní situace, kde běžné biquad filtry ani stacionární spektrální brány nestačí:
+
+1. **Inverzní filtr místnosti / De-reverberace (`CepstralDeverbProcessor.kt` & `CepstralDeverbCard.kt`)**:
+   - **Forenzní detektivní princip**: Odposlechy z prázdných místností, kachličkových koupelen, toalet či chodeb trpí silnou ozvěnou (multipath reverberací), která slévá sykavky a ničí srozumitelnost mluveného slova.
+   - **Matematický princip**: Cepstrální analýza v quefrenční oblasti ($C[n] = \text{IFFT}(\ln(|\text{FFT}(x)|))$). Algoritmus detekuje periodické špičky odrazů stěn v okně 10–120 ms, určí časový lag a sílu odrazu.
+   - **Inverzní hřebenový filtr (Inverse Comb Filter)**: Aplikuje feedforward inverzní filtraci se sekundárním potlačením harmonických odrazů a obnovou třpytu řečových formantů pro „vysušení“ ozvěny.
+   - **Testovací vzorek**: Vygenerován scénář `Bathroom_Tiles_Echo_Case.wav`.
+
+2. **Adaptivní LMS filtr pro dynamický šum (`AdaptiveLmsFilter.kt` & `AdaptiveLmsCard.kt`)**:
+   - **Forenzní detektivní princip**: Spektrální brána (Fáze 2) čistí pouze stacionární šum (konstantní ventilátor). Při proměnlivém hluku aut na ulici, štěkání psa nebo větru spektrální brána selhává.
+   - **Matematický princip**: Architektura ALE (Adaptive Line Enhancer) s Leaky NLMS (Normalized Least Mean Squares). Filtr s 48 FIR váhami v reálném čase adaptivně sleduje korelaci dynamického hluku a odčítá jej jako chybový signál $e[n] = d[n] - y[n]$.
+   - **Ochrana řečových formantů**: Využívá okamžitou energii signálu ke zmrazení adaptace během znění samohlásek, takže lidská řeč zůstává plně chráněna a nedochází k jejímu poškození.
+   - **Testovací vzorek**: Vygenerován scénář `Street_Traffic_Dynamic_Noise.wav`.
+
 ---
 
 ## 🧪 3. Testování a verifikace
@@ -87,6 +102,8 @@ Implementován forenzní systém pro situace, kdy na dlouhém záznamu hraje v p
 | `DspUnitTest.testWhisperCompressor_boostsLowLevelSignals` | ✅ PASSED | Ověření dynamického zesílení tichého signálu na úrovni -40 dB. |
 | `DspUnitTest.testVoiceSeparator_isolatesVocalFormants` | ✅ PASSED | Ověření nárůstu poměru vokální energie po STFT separaci hlasu od 50 Hz brumu. |
 | `DspUnitTest.testReferenceAudioCanceller_subtractsKnownSongAndPreservesSpeech` | ✅ PASSED | Ověření 2-krokového naučení známé písničky a jejího odečtení při zachování řečového formantu. |
+| `DspUnitTest.testCepstralDeverbProcessor_detectsAndDriesEcho` | ✅ PASSED | Ověření detekce zpoždění odrazu v koupelně (25 ms) a jeho útlumu inverzním hřebenovým filtrem. |
+| `DspUnitTest.testAdaptiveLmsFilter_attenuatesDynamicNoise` | ✅ PASSED | Ověření adaptivní NLMS konvergence a potlačení proměnlivého hluku projíždějících vozidel. |
 | `ExampleRobolectricTest` | ✅ PASSED | Ověření čtení stringových zdrojů v kontextu aplikace. |
 | `compile_applet` (Gradle assembleDebug) | ✅ SUCCESS | 100% čistý build bez varování a chyb. |
 

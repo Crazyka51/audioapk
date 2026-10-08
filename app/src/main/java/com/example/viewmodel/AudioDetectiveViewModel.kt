@@ -9,8 +9,12 @@ import com.example.audio.ForensicAudioPlayer
 import com.example.audio.PlaybackState
 import com.example.audio.RecordingStatus
 import com.example.data.AudioDetectiveRepository
+import com.example.dsp.AdaptiveLmsFilter
+import com.example.dsp.CepstralDeverbProcessor
 import com.example.dsp.FftProcessor
 import com.example.dsp.LearnedSpectralProfile
+import com.example.dsp.LmsFilterMetrics
+import com.example.dsp.ReverberationMetrics
 import com.example.dsp.SpectrogramResult
 import com.example.dsp.VoiceSeparationMode
 import com.example.dsp.VoiceSeparationStats
@@ -58,6 +62,12 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
 
     private val _voiceSeparationStats = MutableStateFlow<VoiceSeparationStats?>(null)
     val voiceSeparationStats: StateFlow<VoiceSeparationStats?> = _voiceSeparationStats.asStateFlow()
+
+    private val _reverbMetrics = MutableStateFlow<ReverberationMetrics?>(null)
+    val reverbMetrics: StateFlow<ReverberationMetrics?> = _reverbMetrics.asStateFlow()
+
+    private val _lmsMetrics = MutableStateFlow<LmsFilterMetrics?>(null)
+    val lmsMetrics: StateFlow<LmsFilterMetrics?> = _lmsMetrics.asStateFlow()
 
     private val _learnedProfile = MutableStateFlow<LearnedSpectralProfile?>(null)
     val learnedProfile: StateFlow<LearnedSpectralProfile?> = _learnedProfile.asStateFlow()
@@ -138,6 +148,13 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
 
                 val separator = VoiceSeparator(fftSize = 1024, hopSize = 256, sampleRate = pcmData.sampleRate)
                 _voiceSeparationStats.value = separator.analyzeVoiceMetrics(pcmData.samples)
+
+                val deverb = CepstralDeverbProcessor(fftSize = 2048, sampleRate = pcmData.sampleRate)
+                _reverbMetrics.value = deverb.analyzeReverberation(pcmData.samples)
+
+                val lms = AdaptiveLmsFilter()
+                val lmsProcessed = lms.process(pcmData.samples, 0.80f, 0.70f)
+                _lmsMetrics.value = lms.evaluateMetrics(pcmData.samples, lmsProcessed)
 
                 // Configure default loop markers to 25% - 75% or first 3 seconds
                 val durMs = item.durationMs
@@ -265,6 +282,84 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
         val updated = _dspConfig.value.copy(vocalFormantBoostDb = boostDb)
         _dspConfig.value = updated
         player.updateDspConfig(updated)
+    }
+
+    // --- Cepstral De-reverberation (Inverse Comb Filter) ---
+
+    fun toggleDeverb(enabled: Boolean) {
+        val updated = _dspConfig.value.copy(deverbEnabled = enabled)
+        _dspConfig.value = updated
+        player.updateDspConfig(updated)
+    }
+
+    fun setDeverbStrength(strength: Float) {
+        val updated = _dspConfig.value.copy(deverbStrength = strength)
+        _dspConfig.value = updated
+        player.updateDspConfig(updated)
+    }
+
+    fun setDeverbManualDelay(delayMs: Float) {
+        val updated = _dspConfig.value.copy(deverbManualDelayMs = delayMs)
+        _dspConfig.value = updated
+        player.updateDspConfig(updated)
+    }
+
+    fun applyDeverbAndSave() {
+        val selected = _selectedAudio.value ?: return
+        val activeConfig = _dspConfig.value.copy(deverbEnabled = true)
+        _dspConfig.value = activeConfig
+        viewModelScope.launch {
+            _isLoading.value = true
+            val sourceFile = File(selected.filePath)
+            val newTrack = repository.processAndSaveFilteredWav(sourceFile, activeConfig, "Deverbed")
+            _isLoading.value = false
+            if (newTrack != null) {
+                _userMessage.value = "Ozvěna odstraněna: ${newTrack.fileName}"
+                loadAudioFiles(autoSelectFirst = false)
+                selectAudioFile(newTrack)
+            } else {
+                _userMessage.value = "Chyba při de-reverberaci"
+            }
+        }
+    }
+
+    // --- Adaptive LMS Filter (Dynamic Noise / Traffic / Dogs) ---
+
+    fun toggleAdaptiveLms(enabled: Boolean) {
+        val updated = _dspConfig.value.copy(adaptiveLmsEnabled = enabled)
+        _dspConfig.value = updated
+        player.updateDspConfig(updated)
+    }
+
+    fun setAdaptiveLmsIntensity(intensity: Float) {
+        val updated = _dspConfig.value.copy(adaptiveLmsIntensity = intensity)
+        _dspConfig.value = updated
+        player.updateDspConfig(updated)
+    }
+
+    fun setAdaptiveLmsSpeechPreserve(preserve: Float) {
+        val updated = _dspConfig.value.copy(adaptiveLmsSpeechPreserve = preserve)
+        _dspConfig.value = updated
+        player.updateDspConfig(updated)
+    }
+
+    fun applyAdaptiveLmsAndSave() {
+        val selected = _selectedAudio.value ?: return
+        val activeConfig = _dspConfig.value.copy(adaptiveLmsEnabled = true)
+        _dspConfig.value = activeConfig
+        viewModelScope.launch {
+            _isLoading.value = true
+            val sourceFile = File(selected.filePath)
+            val newTrack = repository.processAndSaveFilteredWav(sourceFile, activeConfig, "LmsCleaned")
+            _isLoading.value = false
+            if (newTrack != null) {
+                _userMessage.value = "Dynamický šum potlačen: ${newTrack.fileName}"
+                loadAudioFiles(autoSelectFirst = false)
+                selectAudioFile(newTrack)
+            } else {
+                _userMessage.value = "Chyba při adaptivní LMS filtraci"
+            }
+        }
     }
 
     fun separateVoiceAndSave() {
