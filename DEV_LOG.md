@@ -34,6 +34,7 @@ Implementována vlastní knihovna pro digitální zpracování signálu (DSP) be
 5. **`WhisperCompressor.kt`**: Forenzní dynamický expandér zesilující tiché pasáže a šepot (+3 dB až +30 dB) s obálkovým detektorem a měkkou limitací přes hyperbolický tangens.
 6. **`SpectralNoiseGate.kt`**: Spektrální odčítání stacionárního šumového profilu pro vyčištění nahrávek od ventilace a motorů.
 7. **`SyntheticAudioGenerator.kt`**: Generátor autentických forenzních testovacích případů (`Suspect_Whisper_Enhance.wav`, `Surveillance_Room4_Hum.wav`, `Interview_01.wav`).
+   - *Poznámka:* Ve Fázi 10 byl generátor i veškeré vestavěné demo nahrávky z aplikace odstraněny.
 
 ### 🔹 Fáze 3: UI Komponenty a interaktivita (Sprint 3)
 1. **`WaveformView.kt`**: Vektorový osciloskop vykreslující RMS obálku s neonovým prosvětlením, indikátorem přehrávací hlavy a interaktivním posunem (drag / tap).
@@ -70,7 +71,7 @@ Implementována vlastní knihovna pro digitální zpracování signálu (DSP) be
 Implementován forenzní systém pro situace, kdy na dlouhém záznamu hraje v pozadí **známá písnička** (jejíž soubor má analytik k dispozici) nebo opakující se rušivý zvuk:
 1. **Krok 1 – Získání spektrálního otisku a STFT matice (`LearnedSpectralProfile`)**:
    - **Varianta A (Vzorek z A–B úseku nahrávky)**: Analytik označí na časové ose úsek A–B (např. několik vteřin, kde zní jen hudba nebo šum bez řeči) a klepne na **„Vzorek z A–B“**. Algoritmus vypočítá průměrný i špičkový 512-pásmový FFT profil.
-   - **Varianta B (Soubor známé písničky – z knihovny nebo telefonu)**: Analytik vybere referenční soubor známé skladby (`.mp3`, `.wav`, `.m4a` z telefonu nebo vzorový soubor `Known_Radio_Song_Reference.wav` k odposlechu `Cafe_Wiretap_With_Song.wav`).
+   - **Varianta B (Soubor známé písničky – z knihovny nebo telefonu)**: Analytik vybere referenční soubor známé skladby (`.mp3`, `.wav`, `.m4a`) z telefonu nebo z knihovny aplikace.
    - **Automatická časová synchronizace (Envelope Cross-Correlation)**: Algoritmus křížovou korelací obálek energie automaticky najde časový posun (`detectedOffsetMs`), kde písnička v nahrávce hraje, a vykreslí náhled spektrogramu naučeného vzorku.
 2. **Krok 2 – Odečtení vzorku / písničky z celé nahrávky (`applyProfileSubtraction`)**:
    - Kombinuje dynamické časově synchronizované STFT rámce referenční skladby s naučeným spektrálním otiskem a adaptivním měřítkem hlasitosti místnosti (*Gain Match*).
@@ -83,13 +84,13 @@ Implementovány dva pokročilé algoritmy pro extrémní situace, kde běžné b
    - **Forenzní detektivní princip**: Odposlechy z prázdných místností, kachličkových koupelen, toalet či chodeb trpí silnou ozvěnou (multipath reverberací), která slévá sykavky a ničí srozumitelnost mluveného slova.
    - **Matematický princip**: Cepstrální analýza v quefrenční oblasti ($C[n] = \text{IFFT}(\ln(|\text{FFT}(x)|))$). Algoritmus detekuje periodické špičky odrazů stěn v okně 10–120 ms, určí časový lag a sílu odrazu.
    - **Inverzní hřebenový filtr (Inverse Comb Filter)**: Aplikuje feedforward inverzní filtraci se sekundárním potlačením harmonických odrazů a obnovou třpytu řečových formantů pro „vysušení“ ozvěny.
-   - **Testovací vzorek**: Vygenerován scénář `Bathroom_Tiles_Echo_Case.wav`.
+   - **Testovací vzorek**: Otestováno na syntetickém scénáři s ozvěnou dlaždicové koupelny (generováno v testech, viz Fáze 10).
 
 2. **Adaptivní LMS filtr pro dynamický šum (`AdaptiveLmsFilter.kt` & `AdaptiveLmsCard.kt`)**:
    - **Forenzní detektivní princip**: Spektrální brána (Fáze 2) čistí pouze stacionární šum (konstantní ventilátor). Při proměnlivém hluku aut na ulici, štěkání psa nebo větru spektrální brána selhává.
    - **Matematický princip**: Architektura ALE (Adaptive Line Enhancer) s Leaky NLMS (Normalized Least Mean Squares). Filtr s 48 FIR váhami v reálném čase adaptivně sleduje korelaci dynamického hluku a odčítá jej jako chybový signál $e[n] = d[n] - y[n]$.
    - **Ochrana řečových formantů**: Využívá okamžitou energii signálu ke zmrazení adaptace během znění samohlásek, takže lidská řeč zůstává plně chráněna a nedochází k jejímu poškození.
-   - **Testovací vzorek**: Vygenerován scénář `Street_Traffic_Dynamic_Noise.wav`.
+   - **Testovací vzorek**: Otestováno na syntetickém scénáři dynamického provozu na ulici (generováno v testech, viz Fáze 10).
 
 ---
 
@@ -102,6 +103,22 @@ Dosavadní přehrávání běželo přes `MediaPlayer`, který neumí aplikovat 
 4. **Zachovaná funkčnost transportu**: Rychlost 0.5x–1.5x s uzamčeným pitch přes `AudioTrack.setPlaybackParams`, přesné hledání, vzorkově přesná A-B smyčka a korektní detekce konce nahrávky.
 5. **Chybová zpětná vazba**: Chyby dekódování/inicializace audio výstupu se už nepolykají přes `printStackTrace`, ale jsou vystaveny přes `errorMessage` a zobrazují se jako snackbar.
 6. **Indikátor zpracování**: Studio zobrazuje nenápadný indikátor „Zpracovávám DSP náhled…“, dokud přepočet neběží.
+
+---
+
+### 🔹 Fáze 10: Odstranění demo nahrávek a AI Studio scaffoldingu
+Aplikace po prvním spuštění automaticky generovala 8 syntetických demo nahrávek. Pro reálné
+forenzní nasazení je to nežádoucí, proto byly kompletně odstraněny:
+
+1. **Zrušen `SyntheticAudioGenerator.kt`** i jeho registr `SAMPLE_SPECS` a metoda
+   `ensureInitialSamples()` v repository. Knihovna je nyní po instalaci **záměrně prázdná**
+   a plní se výhradně uživatelským importem nebo nahrávkou (REC).
+2. **Odstraněno pole `isSample`** z modelu `AudioFileItem`, protože rozlišovalo pouze demo vzorky.
+3. **Přidány prázdné stavy**: Dashboard i Library nyní při prázdné knihovně zobrazí výzvu
+   k importu vlastního audia místo prázdné obrazovky.
+4. **Odstraněn AI Studio scaffolding**: nepoužívané závislosti (Firebase, Room, Moshi,
+   Retrofit, OkHttp) a pluginy KSP, Secrets a Google Services. KSP v headless CI vyhazoval
+   neškodnou, ale matoucí AWT výjimku. APK se tím zmenšilo z ~22,5 MB na ~16,8 MB.
 
 ---
 

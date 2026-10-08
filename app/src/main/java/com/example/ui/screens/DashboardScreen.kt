@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FloatingActionButton
@@ -38,6 +39,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -82,6 +84,7 @@ fun DashboardScreen(
 ) {
     var searchVisible by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var pendingDelete by remember { mutableStateOf<AudioFileItem?>(null) }
 
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -307,7 +310,7 @@ fun DashboardScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "No recordings found.\nTap the REC button below to record live audio.",
+                            text = "No recordings found.\nImport an audio file or tap REC to record live audio.",
                             color = ForensicTextMuted,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                             style = MaterialTheme.typography.bodyMedium
@@ -345,7 +348,7 @@ fun DashboardScreen(
                             viewModel.selectAudioFile(item)
                             viewModel.processAndSaveCopy("Exported")
                         },
-                        onDelete = { viewModel.deleteAudioFile(item) },
+                        onDelete = { pendingDelete = item },
                         onOpenStudio = onOpenStudio
                     )
                 }
@@ -387,6 +390,34 @@ fun DashboardScreen(
                     color = ForensicRed
                 )
             }
+        }
+
+        val deleteTarget = pendingDelete
+        if (deleteTarget != null) {
+            AlertDialog(
+                onDismissRequest = { pendingDelete = null },
+                title = { Text("Smazat nahrávku?", color = ForensicTextPrimary) },
+                text = {
+                    Text(
+                        "Nahrávka \"${deleteTarget.fileName}\" bude nevratně smazána ze zařízení.",
+                        color = ForensicTextSecondary
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.deleteAudioFile(deleteTarget)
+                        pendingDelete = null
+                    }) {
+                        Text("Smazat", color = ForensicRed)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingDelete = null }) {
+                        Text("Zrušit", color = ForensicTextSecondary)
+                    }
+                },
+                containerColor = ForensicSurfaceVariant
+            )
         }
     }
 }

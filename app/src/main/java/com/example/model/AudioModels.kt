@@ -23,7 +23,6 @@ data class AudioFileItem(
     val channels: Int = 1,
     val status: AudioStatus = AudioStatus.ORIGINAL,
     val createdAt: Long = System.currentTimeMillis(),
-    val isSample: Boolean = false,
     val noiseFloorDb: Float = -48.0f,
     val peakDb: Float = -3.2f,
     val rmsDb: Float = -24.5f,

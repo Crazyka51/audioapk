@@ -60,7 +60,6 @@ app/src/main/java/com/example/
 │   ├── FftProcessor.kt           # Radix-2 Cooley-Tukey FFT, Hanningovo okno, spektrální analýza
 │   ├── ReferenceAudioCanceller.kt# 2-krokové odečtení známé písničky a křížová korelace
 │   ├── SpectralNoiseGate.kt      # Spektrální subtrakce stacionárního šumu (ventilace, brum)
-│   ├── SyntheticAudioGenerator.kt# Generátor forenzních testovacích scénářů
 │   ├── VoiceSeparator.kt         # STFT separace řeči, izolace formantů a hlasové maskování
 │   ├── WavHelper.kt              # Standardní RIFF/WAVE IO operace (16-bit PCM normalizace)
 │   └── WhisperCompressor.kt      # Zesilovač šepotu s měkkou limitací přes tanh()
@@ -137,25 +136,18 @@ Pokud chceš implementovat nový filtr (např. *Parametrický 5-pásmový EQ* ne
 
 ---
 
-### 4.2 Recept 2: Jak přidat nový přednastavený testovací audio scénář
-Všechny vestavěné vzorové audio nahrávky jsou definovány v `SyntheticAudioGenerator.kt`:
-1. V `SyntheticAudioGenerator.kt` vytvoř novou generovací funkci:
-   ```kotlin
-   fun generateMyScenario(file: File, sampleRate: Int = 44100, durationSec: Float = 10.0f) {
-       val numSamples = (sampleRate * durationSec).toInt()
-       val samples = FloatArray(numSamples)
-       // Matematická syntéza signálu, ruchů a řeči
-       WavHelper.writeWav(file, samples, sampleRate, 1)
-   }
-   ```
-2. V `AudioDetectiveRepository.kt` v metodě `ensureInitialSamples()` přidej nový soubor do inicializace:
-   ```kotlin
-   val file = File(recordingsDir, "My_New_Scenario.wav")
-   if (!file.exists()) {
-       SyntheticAudioGenerator.generateMyScenario(file, 44100, 10.0f)
-   }
-   ```
-3. Po startu aplikace se soubor automaticky vygeneruje do interního sandboxu a zobrazí v knihovně.
+### 4.2 Recept 2: Jak přidat vlastní testovací nahrávku do knihovny
+Aplikace po startu **negeneruje žádné demo nahrávky** – knihovna je záměrně prázdná, dokud
+analytik nedodá reálný důkazní materiál. Postup:
+1. Připrav si zvukový soubor ve formátu, který dekodér podporuje (`.wav`, `.mp3`, `.m4a`, `.aac`, `.ogg`, `.flac`).
+2. V aplikaci stiskni **Import Audio** (Dashboard nebo Library) a vyber soubor ze zařízení.
+3. Aplikace soubor dekóduje do mono PCM 44,1 kHz, uloží pracovní kopii do interního
+   sandboxu (`filesDir/recordings`) a zobrazí ji v knihovně jako `Original`.
+4. Originál zůstává nedotčený; veškeré úpravy vytvářejí nové pracovní stopy.
+
+> Pro reprodukovatelné testy DSP jádra slouží jednotkové testy v `DspUnitTest.kt`, které si
+> signály syntetizují přímo v kódu (sine, formanty, ozvěna). Repozitář nedodává žádné
+> předgenerované zvukové soubory.
 
 ---
 

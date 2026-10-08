@@ -7,7 +7,6 @@ import com.example.dsp.AudioDecoder
 import com.example.dsp.AudioDspChain
 import com.example.dsp.LearnedSpectralProfile
 import com.example.dsp.ReferenceAudioCanceller
-import com.example.dsp.SyntheticAudioGenerator
 import com.example.dsp.VoiceSeparator
 import com.example.dsp.WavAudioData
 import com.example.dsp.WavHelper
@@ -32,8 +31,6 @@ class AudioDetectiveRepository(private val context: Context) {
     private val reportsDir: File = File(context.filesDir, "reports").apply { mkdirs() }
 
     suspend fun getAudioFiles(): List<AudioFileItem> = withContext(Dispatchers.IO) {
-        ensureInitialSamples()
-
         val files = recordingsDir.listFiles()?.filter {
             it.name.endsWith(".wav", ignoreCase = true) ||
             it.name.endsWith(".mp3", ignoreCase = true) ||
@@ -75,8 +72,7 @@ class AudioDetectiveRepository(private val context: Context) {
                 bitDepth = wavInfo?.bitsPerSample ?: 16,
                 channels = wavInfo?.channels ?: 1,
                 status = status,
-                createdAt = file.lastModified(),
-                isSample = SyntheticAudioGenerator.isSampleFile(file.name)
+                createdAt = file.lastModified()
             )
         }
     }
@@ -372,22 +368,12 @@ class AudioDetectiveRepository(private val context: Context) {
 
     suspend fun deleteAudioFile(item: AudioFileItem): Boolean = withContext(Dispatchers.IO) {
         val file = File(item.filePath)
-        if (file.exists()) {
-            file.delete()
-        } else false
+        // Treat an already-absent file as a successful delete so the UI stays consistent.
+        !file.exists() || file.delete()
     }
 
     fun getNewRecordingOutputFile(titlePrefix: String = "Recording"): File {
         val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         return File(recordingsDir, "${titlePrefix}_${timeStamp}.wav")
-    }
-
-    private fun ensureInitialSamples() {
-        SyntheticAudioGenerator.SAMPLE_SPECS.forEach { spec ->
-            val file = File(recordingsDir, spec.fileName)
-            if (!file.exists()) {
-                spec.generate(file, 44100, spec.durationSec)
-            }
-        }
     }
 }

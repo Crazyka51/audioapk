@@ -629,7 +629,12 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
 
     fun deleteAudioFile(item: AudioFileItem) {
         viewModelScope.launch {
-            repository.deleteAudioFile(item)
+            val deleted = repository.deleteAudioFile(item)
+            if (!deleted) {
+                _userMessage.value = "Nahrávku se nepodařilo smazat: ${item.fileName}"
+                return@launch
+            }
+
             val files = repository.getAudioFiles()
             _audioFiles.value = files
             if (_selectedAudio.value?.id == item.id) {
@@ -642,6 +647,7 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
                     player.stop()
                 }
             }
+            _userMessage.value = "Smazáno: ${item.fileName}"
         }
     }
 

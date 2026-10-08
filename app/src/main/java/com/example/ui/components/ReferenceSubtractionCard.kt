@@ -302,7 +302,7 @@ fun ReferenceSubtractionCard(
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
-                            text = "Vyberte referenční stopu (např. Known_Radio_Song_Reference.wav):",
+                            text = "Vyberte referenční stopu (známou skladbu) z knihovny:",
                             fontSize = 11.sp,
                             color = ForensicTextSecondary
                         )

@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -38,7 +39,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -77,6 +83,8 @@ fun LibraryScreen(
             viewModel.importAudioFile(uri, null)
         }
     }
+
+    var pendingDelete by remember { mutableStateOf<AudioFileItem?>(null) }
 
     Box(
         modifier = modifier
@@ -241,6 +249,26 @@ fun LibraryScreen(
                 )
             }
 
+            if (audioFiles.isEmpty()) {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(140.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(ForensicSurfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Knihovna je prázdná.\nImportuj vlastní audio tlačítkem Import Audio.",
+                            color = ForensicTextMuted,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+
             items(audioFiles, key = { it.id }) { item ->
                 val isSelected = selectedAudio?.id == item.id
                 Row(
@@ -296,7 +324,7 @@ fun LibraryScreen(
                         StatusBadge(status = item.status)
                         Spacer(modifier = Modifier.width(6.dp))
                         IconButton(
-                            onClick = { viewModel.deleteAudioFile(item) },
+                            onClick = { pendingDelete = item },
                             modifier = Modifier.size(32.dp)
                         ) {
                             Icon(
@@ -313,6 +341,34 @@ fun LibraryScreen(
             item {
                 Spacer(modifier = Modifier.height(40.dp))
             }
+        }
+
+        val deleteTarget = pendingDelete
+        if (deleteTarget != null) {
+            AlertDialog(
+                onDismissRequest = { pendingDelete = null },
+                title = { Text("Smazat nahrávku?", color = ForensicTextPrimary) },
+                text = {
+                    Text(
+                        "Nahrávka \"${deleteTarget.fileName}\" bude nevratně smazána ze zařízení.",
+                        color = ForensicTextSecondary
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.deleteAudioFile(deleteTarget)
+                        pendingDelete = null
+                    }) {
+                        Text("Smazat", color = ForensicRed)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingDelete = null }) {
+                        Text("Zrušit", color = ForensicTextSecondary)
+                    }
+                },
+                containerColor = ForensicSurfaceVariant
+            )
         }
     }
 }
