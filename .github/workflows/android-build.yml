@@ -40,25 +40,8 @@ jobs:
         with:
           packages: "platform-tools"
 
-      # A debug keystore is generated per runner, so every CI run used to produce an APK with a
-      # different signature. Android then refuses in-place updates (INSTALL_FAILED_UPDATE_INCOMPATIBLE)
-      # and testing on a device meant losing app data on every build.
-      #
-      # Seeding the runner's standard debug keystore from the DEBUG_KEYSTORE_BASE64 secret makes CI
-      # use the very same key as a local Android Studio build. Without the secret the step is a no-op
-      # and AGP falls back to generating an ephemeral keystore, so forks still build fine.
-      - name: Seed stable debug keystore
-        env:
-          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
-        run: |
-          if [ -z "$DEBUG_KEYSTORE_BASE64" ]; then
-            echo "DEBUG_KEYSTORE_BASE64 is not set - AGP will generate an ephemeral debug keystore."
-            exit 0
-          fi
-          mkdir -p "$HOME/.android"
-          printf '%s' "$DEBUG_KEYSTORE_BASE64" | base64 -d > "$HOME/.android/debug.keystore"
-          chmod 600 "$HOME/.android/debug.keystore"
-          echo "Seeded the shared debug keystore; the APK signature will match local builds."
+      # The debug APK is signed with app/debug.keystore, which is committed on purpose so that
+      # local builds and CI share one key and APKs can be installed over each other.
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -69,8 +52,9 @@ jobs:
       - name: Assemble debug APK
         run: gradle :app:assembleDebug --stacktrace --no-daemon
 
-      # Makes the APK signature visible in the log, which is how you confirm the shared debug
-      # keystore was picked up (the SHA-256 must match your local ~/.android/debug.keystore).
+      # Makes the APK signature visible in the log, which is how you confirm the committed
+      # shared debug keystore (app/debug.keystore) was used. Expected SHA-256:
+      # 2b0806347966 5f3a8ae3 434d7554 2734e9b8 22718742 c4421c2d b623996d 9f10
       - name: Report APK signing certificate
         continue-on-error: true
         run: |

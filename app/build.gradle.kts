@@ -25,6 +25,17 @@ android {
       keyAlias = "upload"
       keyPassword = System.getenv("KEY_PASSWORD")
     }
+    // Shared debug key committed to the repository. A debug keystore holds no secret material
+    // (well-known alias and password) and it is never used for release builds. Pinning it makes
+    // local builds and CI produce identically signed APKs, so a new build can be installed over
+    // the previous one. With AGP's default behaviour the debug key is generated per machine and
+    // per CI runner, which made every CI APK a different signer (INSTALL_FAILED_UPDATE_INCOMPATIBLE).
+    create("sharedDebug") {
+      storeFile = file("debug.keystore")
+      storePassword = "android"
+      keyAlias = "androiddebugkey"
+      keyPassword = "android"
+    }
   }
 
   buildTypes {
@@ -34,10 +45,7 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
-    // Debug builds intentionally use the default debug signing config (the auto-generated
-    // ~/.android/debug.keystore). The previous hardcoded "debugConfig" pointed at a
-    // rootDir/debug.keystore that is gitignored, which broke fresh clones and CI builds.
-    debug { }
+    debug { signingConfig = signingConfigs.getByName("sharedDebug") }
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11

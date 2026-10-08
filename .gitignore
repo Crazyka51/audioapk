@@ -18,3 +18,7 @@ local.properties
 debug.keystore
 *.jks
 *.keystore
+# The shared debug keystore is intentionally committed so local and CI builds sign with the
+# same key and APKs can be installed over each other. It is a debug key only - never use it
+# to sign a release.
+!app/debug.keystore

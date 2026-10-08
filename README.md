@@ -39,30 +39,37 @@ distribuci do Google Play.
 
 ### Stabilní podpis APK (aby šly aktualizace přes sebe)
 
-Každý běh CI si původně vygeneroval vlastní debug keystore, takže se podpis mezi buildy
-lišil a Android odmítl instalaci přes předchozí verzi
-(`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) – testování na zařízení pak znamenalo odinstalaci
-a ztrátu dat aplikace.
+Android povolí instalaci nové verze přes předchozí jen tehdy, když je podepsaná **stejným
+klíčem**. AGP si standardně generuje debug klíč zvlášť pro každý počítač i pro každý běh CI,
+takže se podpisy lišily a instalace končila chybou
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE` (a testování na zařízení znamenalo odinstalaci
+a ztrátu dat aplikace).
 
-Řešení: CI si před buildem nasadí **stejný** debug keystore, jaký používá tvůj počítač.
+Proto je v repozitáři **commitnutý společný debug keystore** `app/debug.keystore` a build ho
+používá pro debug variantu na všech strojích:
 
-1. Vytvoř base64 svého lokálního klíče (PowerShell):
+| Parametr | Hodnota |
+| --- | --- |
+| Soubor | `app/debug.keystore` |
+| Alias | `androiddebugkey` |
+| Heslo (store i key) | `android` |
+| Platnost | 30 let |
 
-   ```powershell
-   [Convert]::ToBase64String([IO.File]::ReadAllBytes("$env:USERPROFILE\.android\debug.keystore"))
-   ```
+Otisk certifikátu (SHA-256):
 
-2. V GitHubu otevři **Settings → Secrets and variables → Actions → New repository secret**.
-3. Název `DEBUG_KEYSTORE_BASE64`, hodnota je výstup z kroku 1.
-4. Spusť workflow znovu. V logu kroku *Report APK signing certificate* zkontroluj, že
-   `certificate SHA-256 digest` odpovídá tvému klíči:
+```
+2B:08:06:34:79:66:5F:3A:8A:E3:43:4D:75:54:27:34:E9:B8:22:71:87:42:C4:42:1C:2D:B6:23:99:6D:9F:10
+```
 
-   ```powershell
-   keytool -list -v -keystore "$env:USERPROFILE\.android\debug.keystore" -storepass android
-   ```
+Ověření, že APK z CI má stejný podpis jako lokální build:
 
-Dokud secret neexistuje, krok se přeskočí a build funguje dál (jen s náhodným klíčem).
-Keystore se do repozitáře necommituje – žije pouze v GitHub Secrets.
+```powershell
+$apksigner = "$env:LOCALAPPDATA\Android\Sdk\build-tools\36.1.0\apksigner.bat"
+& $apksigner verify --print-certs "$env:USERPROFILE\Downloads\audioapk-apk\app-debug.apk"
+```
+
+> **Pozor:** jde o debug klíč s veřejně známým heslem – nikdy jím nepodepisuj release build.
+> Ten používá samostatný `my-upload-key.jks` (viz Poznámky níže).
 
 ## Testy
 
