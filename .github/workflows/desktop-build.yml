@@ -1,0 +1,63 @@
+name: Windows Desktop CI
+
+# Builds the standalone Windows desktop application (AudioDetective Pro for Windows).
+#
+# The desktop module reuses the Android app's DSP core, models and theme, so a change to the shared
+# code is verified on both platforms: this workflow builds and tests the desktop app, while
+# android-build.yml assembles the APK.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows-desktop:
+    name: Build Windows desktop app
+    # Windows is required: jpackage only produces an .exe on a Windows host.
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Run desktop unit tests
+        run: gradle :desktop:test --stacktrace --no-daemon
+
+      - name: Build Windows application image
+        run: gradle :desktop:createDistributable --stacktrace --no-daemon
+
+      - name: Report packaged launcher
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Get-ChildItem desktop/build/compose/binaries/main/app -Recurse -Filter *.exe |
+            ForEach-Object { "$($_.FullName) ($([math]::Round($_.Length / 1MB, 1)) MB)" }
+
+      - name: Upload Windows application
+        uses: actions/upload-artifact@v4
+        with:
+          name: AudioDetectivePro-Windows
+          path: desktop/build/compose/binaries/main/app/AudioDetectivePro/**
+          if-no-files-found: error
+          retention-days: 14

@@ -8,7 +8,7 @@ import android.media.PlaybackParams
 import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
-import com.example.dsp.AudioDecoder
+import com.example.audio.AudioDecoder
 import com.example.dsp.AudioDspChain
 import com.example.dsp.AudioTooLargeException
 import com.example.dsp.WavAudioData

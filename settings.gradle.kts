@@ -25,3 +25,4 @@ dependencyResolutionManagement {
 rootProject.name = "AudioDetective Pro"
 
 include(":app")
+include(":desktop")

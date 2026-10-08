@@ -31,6 +31,23 @@ Tento dokument slouží jako komplexní technická a produktová „kuchařka“
 
 ## 🏗️ 2. Technická specifikace a systémová architektura
 
+### 2.0 Dvě aplikace nad jedním jádrem
+
+Projekt cílí na dvě platformy, ale **DSP jádro, datové modely a vizuální styl jsou sdílené** –
+existují pouze jednou, ve `app/src/main/java/com/example/{dsp,model,ui/theme}`. Desktopový modul
+`desktop/` si tyto adresáře přidává do svého source setu, takže se změna filtru projeví v APK
+i v `.exe` a výsledek je bit po bitu stejný.
+
+| Vrstva | Android (`app`) | Windows (`desktop`) |
+| --- | --- | --- |
+| DSP jádro, modely, téma | `dsp`, `model`, `ui/theme` | **stejné soubory** |
+| Dekódování souborů | `audio/AudioDecoder` (MediaCodec) | `desktop/DesktopAudioDecoder` + `Mp3Decoder`, `FlacDecoder`, `OggDecoder` |
+| Přehrávání | `audio/ForensicAudioPlayer` (`AudioTrack`) | `desktop/DesktopAudioPlayer` (`SourceDataLine`) |
+| Záznam | `audio/AudioRecorderManager` (`AudioRecord`) | `desktop/DesktopAudioRecorder` (`TargetDataLine`) |
+| Úložiště | `data/AudioDetectiveRepository` + `data/AudioExporter` | `desktop/DesktopAudioRepository` |
+| Stavová logika | `viewmodel/AudioDetectiveViewModel` | `desktop/DesktopViewModel` |
+| UI | `ui/screens`, `ui/components` (Compose M3) | `desktop/.../Main.kt` + `desktop/ui/*` (stejné uspořádání a barvy) |
+
 ### 2.1 Technologický stack
 * **Platforma:** Android (minSdk: 24, targetSdk: 36, compileSdk: 36)
 * **Jazyk:** Kotlin 2.2+ (100% čistý Kotlin bez externích C++ NDK wrapperů pro maximální přenositelnost)

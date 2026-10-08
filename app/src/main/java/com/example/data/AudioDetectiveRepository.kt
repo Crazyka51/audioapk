@@ -4,7 +4,7 @@ import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.OpenableColumns
-import com.example.dsp.AudioDecoder
+import com.example.audio.AudioDecoder
 import com.example.dsp.AudioDspChain
 import com.example.dsp.AudioMemoryBudget
 import com.example.dsp.AudioTooLargeException

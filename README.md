@@ -1,13 +1,76 @@
 # AudioDetective Pro
 
-Forenzní audio editor a spektrální analyzátor pro Android. Umožňuje čistit nahrávky,
-izolovat šepot a lidský hlas, potlačit ozvěnu místnosti a dynamický hluk, odečíst
-známou písničku a vygenerovat forenzní protokol. Vše běží 100% offline v zařízení.
+Forenzní audio editor a spektrální analyzátor. Umožňuje čistit nahrávky, izolovat šepot a lidský
+hlas, potlačit ozvěnu místnosti a dynamický hluk, odečíst známou písničku a vygenerovat forenzní
+protokol. Vše běží 100% offline na zařízení, bez jakékoli sítě.
 
-> Poznámka: toto je **nativní Android aplikace** (Kotlin + Jetpack Compose). Nejde ji
+Projekt dnes obsahuje **dvě aplikace nad jedním DSP jádrem**:
+
+| Aplikace | Modul | Cíl |
+| --- | --- | --- |
+| AudioDetective Pro (mobil) | `app` | Android telefon / tablet |
+| AudioDetective Pro (desktop) | `desktop` | Windows PC (`.exe`) |
+
+Obě používají stejný `com.example.dsp` balíček, stejné datové modely a stejný vizuální styl,
+takže se změna DSP projeví na obou platformách a výsledek filtru je identický.
+
+> Poznámka: mobilní část je **nativní Android aplikace** (Kotlin + Jetpack Compose). Nejde ji
 > spustit v Expo ani v jiném React Native / JavaScript runtime.
 
-## Požadavky
+## Windows aplikace (desktop)
+
+Desktopový modul je Compose Desktop aplikace, která sdílí DSP jádro, modely a téma s Androidem.
+Uspořádání odpovídá mobilní aplikaci: horní lišta, záložky **Home / Studio / Library / Effects /
+Report** a spodní navigace.
+
+Odlišnosti dané platformou:
+
+| Oblast | Android | Windows |
+| --- | --- | --- |
+| Knihovna | interní sandbox + export do `Music/AudioDetective` | přímo `%USERPROFILE%\Music\AudioDetective` (knihovna = složka, hned viditelná v Průzkumníku) |
+| Reporty | sdílení přes Android Share | textové protokoly do `%USERPROFILE%\Documents\AudioDetective\reports` |
+| Formáty | WAV, MP3, M4A, AAC, OGG, FLAC (MediaCodec) | WAV, AU, AIFF, MP3, FLAC, OGG |
+| Rychlost přehrávání | pitch lock | tape style (rychlost mění i výšku tónu) |
+
+### Podporované formáty na Windows
+
+`WAV` (8/16/24/32-bit PCM), `AU`, `AIFF`, `MP3`, `FLAC`, `OGG`. Formáty `.m4a`, `.aac`, `.wma`,
+`.opus` a `.amr` aplikace neumí a při importu to řekne.
+
+MP3, FLAC a OGG dekódují vlastní dekodéry (JLayer, jFLAC, VorbisSPI) volané přímo. Důvod: jejich
+SPI providery se registrují přes `META-INF/services`, což `AudioSystem` na moderních JDK přestal
+pro providery na classpath načítat, takže by import MP3 skončil chybou „nepodařilo se dekódovat“.
+
+### Build a spuštění Windows aplikace
+
+```bash
+# rychlé spuštění ze zdrojáků
+gradle :desktop:run
+
+# testy dekodérů a paměťového rozpočtu
+gradle :desktop:test
+
+# samostatná aplikace (složka s .exe, nepotřebuje Javu v systému)
+gradle :desktop:createDistributable
+```
+
+Výsledek je v `desktop/build/compose/binaries/main/app/AudioDetectivePro/AudioDetectivePro.exe`;
+distribuuje se celá složka, protože obsahuje přiložený runtime. `packageExe` / `packageMsi` umí
+navíc instalátor, ale MSI vyžaduje nainstalovaný WiX Toolset.
+
+### Volitelné testovací vzorky
+
+Testy formátů se spouští nad skutečnými soubory, když jim předáš cestu:
+
+```bash
+gradle :desktop:test -Dfixture.mp3=C:\cesta\vzorek.mp3 -Dfixture.flac=C:\cesta\vzorek.flac -Dfixture.ogg=C:\cesta\vzorek.ogg
+```
+
+Bez vzorků se přeskočí jen kontrola komprimovaných formátů; WAV testy běží vždy.
+
+## Android aplikace
+
+### Požadavky
 
 - Android Studio (doporučeno) nebo Gradle 9.3.1 + JDK 17+
 - Android SDK s API 36 (`compileSdk`/`targetSdk` = 36, `minSdk` = 24)
@@ -33,6 +96,11 @@ sestaví debug APK na každý push do `main` a lze ho spustit i ručně:
 1. Otevři záložku **Actions** v repozitáři.
 2. Vyber workflow **Android CI** a klikni na **Run workflow**.
 3. Po dokončení stáhni artifact **AudioDetective-debug-apk** (obsahuje `app-debug.apk`).
+
+Windows aplikaci staví workflow
+[`.github/workflows/desktop-build.yml`](.github/workflows/desktop-build.yml) (artifact
+**AudioDetectivePro-Windows**). Běží na Windows runneru, protože `jpackage` umí vytvořit `.exe`
+jen tam.
 
 APK je podepsané debug klíčem, takže je vhodné pro testování, ne pro
 distribuci do Google Play.
@@ -98,14 +166,16 @@ $apksigner = "$env:LOCALAPPDATA\Android\Sdk\build-tools\36.1.0\apksigner.bat"
 
 ## Testy
 
-```bash
-gradle :app:testDebugUnitTest
-```
-
 Testy pokrývají DSP jádro (`DspUnitTest.kt`) – FFT, biquad filtry, whisper kompresor, STFT
 separaci hlasu, odečtení známé písničky, cepstrální de-reverberaci a adaptivní LMS filtr –
-a streamované načítání WAV (`WavHelperTest.kt`) – hlavička, downmix kanálů, přeskakování
-chunků a odmítnutí příliš dlouhé nahrávky.
+streamované načítání WAV (`WavHelperTest.kt`) – hlavička, downmix kanálů, přeskakování
+chunků a odmítnutí příliš dlouhé nahrávky – export do zařízení (`AudioExporterTest.kt`)
+a desktopové dekodéry včetně MP3/FLAC/OGG (`DesktopAudioDecoderTest.kt`):
+
+```bash
+gradle :app:testDebugUnitTest     # Android
+gradle :desktop:test              # Windows desktop
+```
 
 ## Poznámky
 

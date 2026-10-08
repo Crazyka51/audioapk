@@ -179,6 +179,42 @@ a přehrávání; export je navíc plnohodnotná kopie pro uživatele (MD5 obou 
 
 ---
 
+### 🔹 Fáze 13: Windows desktop aplikace nad stejným DSP jádrem
+Cílem bylo vytvořit z mobilní aplikace **aplikaci pro Windows**, ne ji přepsat. Ukázalo se, že
+to jde levně, protože `com.example.dsp` je čistý Kotlin bez Android SDK (výjimkou byl
+`AudioDecoder` závislý na `MediaCodec`, ten se přesunul do balíčku `com.example.audio`).
+
+**Architektura (`desktop/` modul, Compose Desktop):**
+
+1. **Sdílený kód místo kopie**: `build.gradle.kts` modulu přidává do svého source setu
+   `app/src/main/java/com/example/dsp`, `.../model` a `.../ui/theme`. Fyzicky tedy existuje
+   jediný soubor DSP jádra, jediné modely a jediná barevná paleta pro obě aplikace.
+2. **Platformní vrstva jen tam, kde být musí**: `DesktopAudioDecoder` (javax.sound),
+   `DesktopAudioPlayer` (`SourceDataLine` místo `AudioTrack`), `DesktopAudioRecorder`
+   (`TargetDataLine`), `DesktopAudioRepository` (knihovna = `Music\AudioDetective`, reporty do
+   `Documents\AudioDetective\reports`) a `DesktopViewModel`.
+3. **Stejné UI uspořádání jako Android**: horní lišta, hero banner „Voice Cleaning Dashboard“,
+   karty nahrávek s quick actions (Trim / Noise Reduction / Voice Boost / Export), záložky
+   **Home / Studio / Library / Effects / Report** a spodní navigace – vše postavené na stejných
+   `Forensic*` barvách, takže aplikace vypadá jako ta mobilní.
+4. **Vlastní dekodéry pro komprimované formáty**: `Mp3Decoder` (JLayer), `FlacDecoder` (jFLAC),
+   `OggDecoder` (VorbisSPI) volané přímo. Důvod je konkrétní chyba: tyto knihovny se registrují
+   přes `META-INF/services`, ale `AudioSystem` od JDK 9 providery na classpath nenačítá, takže
+   každý import MP3 skončil jako „nepodařilo se dekódovat“. WAV jde dál přes sdílený `WavHelper`
+   (24/32-bit, downmix, paměťový rozpočet).
+5. **Metriky knihovny**: `toItem()` dopočítá Peak, RMS, Noise floor a podíl energie v pásmu řeči
+   ze skutečných vzorků (s cache podle `lastModified`), takže inspektor v Knihovně ukazuje stejná
+   čísla jako na Androidu. Délka se bere z **počtu dekódovaných vzorků**, protože `frameLength`
+   od MP3SPI je nespolehlivý (u minutového souboru hlásil 0,05 s).
+6. **Distribuce**: `gradle :desktop:createDistributable` vytvoří složku s `AudioDetectivePro.exe`
+   a přiloženým runtime (necelých 160 MB), takže aplikace běží i bez nainstalované Javy. CI
+   workflow `desktop-build.yml` ji staví na Windows runneru (jpackage umí `.exe` jen tam).
+7. **Testy**: `DesktopAudioDecoderTest` ověřuje WAV round trip, odmítnutí nepodporovaných
+   přípon, paměťový rozpočet a – se vzorky přes `-Dfixture.mp3/flac/ogg` – že každý komprimovaný
+   formát skutečně dekóduje zvuk (ne jen ticho).
+
+---
+
 ## 🧪 3. Testování a verifikace
 
 | Testovací sada | Výsledek | Popis |
@@ -193,8 +229,11 @@ a přehrávání; export je navíc plnohodnotná kopie pro uživatele (MD5 obou 
 | `ExampleRobolectricTest` | ✅ PASSED | Ověření čtení stringových zdrojů v kontextu aplikace. |
 | `WavHelperTest` (7 testů) | ✅ PASSED | Streamované čtení hlavičky, downmix kanálů do mono, přeskočení neznámých chunků, odmítnutí příliš dlouhé nahrávky a 16-bit round trip. |
 | `AudioExporterTest` (4 testy) | ✅ PASSED | Cílové názvy exportu (`name.wav`, `name_1.wav`, …) a název cílové složky `Music/AudioDetective`. |
+| `DesktopAudioDecoderTest` (6 testů) | ✅ PASSED | Desktopové dekódování: WAV round trip, odmítnutí `.m4a`, paměťový rozpočet, chybná data a reálné MP3/FLAC/OGG vzorky (musí dát nenulový signál). |
 | `gradle :app:testDebugUnitTest` | ✅ SUCCESS | 20/20 testů zelených (lokálně, Gradle 9.3.1). |
+| `gradle :desktop:test` | ✅ SUCCESS | 6/6 testů zelených, včetně dekódování MP3, FLAC a OGG. |
 | `gradle :app:assembleDebug` | ✅ SUCCESS | Build APK bez chyb; ověřeno i spuštění na emulátoru (Android 37.1). |
+| `gradle :desktop:createDistributable` | ✅ SUCCESS | Windows aplikace (`AudioDetectivePro.exe`) spuštěna samostatně, bez Javy v systému. |
 | Export do `Music/AudioDetective` na zařízení | ✅ VERIFIED | Export z Dashboardu vytvořil `/sdcard/Music/AudioDetective/*.wav` s totožným MD5 jako interní kopie; MediaStore eviduje `relative_path=Music/AudioDetective/`. |
 
 ---
