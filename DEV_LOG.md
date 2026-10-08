@@ -122,6 +122,36 @@ forenzní nasazení je to nežádoucí, proto byly kompletně odstraněny:
 
 ---
 
+### 🔹 Fáze 11: Streamované načítání audia a paměťový rozpočet (oprava pádu při importu)
+Import nahrávky o velikosti ~230 MB shazoval aplikaci přes
+`java.lang.OutOfMemoryError: Failed to allocate a 229674472 byte allocation` s pádem uvnitř
+`AudioDecoder.decodeToPcm`. Příčinou bylo načtení celého souboru do paměti (`InputStream.readBytes()`)
+a následná druhá kopie pole, ke které se teprve stavěl výsledný `FloatArray`.
+
+**Provedená oprava:**
+
+1. **`WavHelper` kompletně přepsán na streamování.** Nová metoda `readWavHeader()` přečte pouze RIFF
+   hlavičku (přeskakuje neznámé chunky) a vrací `WavHeader` s počtem rámců. `readWav()` /
+   `readWavFromStream()` čtou datový chunk po 64kB blocích a rovnou správně **downmixují** kanály
+   do mono (dříve se bral pouze kanál 0). Metoda `readWavBytes()` byla odstraněna, aby se zakázaný
+   vzor nemohl vrátit.
+2. **`AudioMemoryBudget`** – nový centrální rozpočet: maximální velikost PCM je 30 % heapu procesu
+   (zbytek musí pokrýt pracovní kopie DSP řetězce). Při překročení se hází `AudioTooLargeException`
+   ještě **před** velkou alokací, takže uživatel dostane hlášku s konkrétním limitem v minutách.
+3. **`AndroidManifest.xml`**: zapnuto `android:largeHeap="true"` (strop se zvedá z 192 MB na 576 MB).
+4. **`AudioDecoder`**: WAV se z `content://` streamu sniffuje i dekóduje na témže streamu bez kopie;
+   `MediaCodec` cesta už nehromadí vzorky do `ArrayList<Float>` (boxing), ale do rostoucího
+   `FloatArray`, a délku kontroluje předem přes `KEY_DURATION`.
+5. **Knihovna souborů**: `getAudioFiles()` už nečte celé soubory, ale jen hlavičky (`readWavHeader`),
+   takže ani výpis knihovny s obřím WAV neshodí aplikaci. Pro ne-WAV soubory se délka bere z
+   `MediaMetadataRetriever`. Metrika `Channels` nyní hlásí skutečný počet kanálů z hlavičky.
+6. **OOM guardy**: těžké DSP kroky v repository (`runHeavyStep`) a živý náhled v přehrávači chytají
+   `OutOfMemoryError` a hlásí chybu, místo aby proces umřel.
+7. **Testy**: nový `WavHelperTest` (7 testů) ověřuje čtení hlavičky, downmix, přeskakování chunků
+   a vyhození `AudioTooLargeException`.
+
+---
+
 ## 🧪 3. Testování a verifikace
 
 | Testovací sada | Výsledek | Popis |
@@ -134,11 +164,17 @@ forenzní nasazení je to nežádoucí, proto byly kompletně odstraněny:
 | `DspUnitTest.testCepstralDeverbProcessor_detectsAndDriesEcho` | ✅ PASSED | Ověření detekce zpoždění odrazu v koupelně (25 ms) a jeho útlumu inverzním hřebenovým filtrem. |
 | `DspUnitTest.testAdaptiveLmsFilter_attenuatesDynamicNoise` | ✅ PASSED | Ověření adaptivní NLMS konvergence a potlačení proměnlivého hluku projíždějících vozidel. |
 | `ExampleRobolectricTest` | ✅ PASSED | Ověření čtení stringových zdrojů v kontextu aplikace. |
-| `compile_applet` (Gradle assembleDebug) | ✅ SUCCESS | 100% čistý build bez varování a chyb. |
+| `WavHelperTest` (7 testů) | ✅ PASSED | Streamované čtení hlavičky, downmix kanálů do mono, přeskočení neznámých chunků, odmítnutí příliš dlouhé nahrávky a 16-bit round trip. |
+| `gradle :app:testDebugUnitTest` | ✅ SUCCESS | 16/16 testů zelených (lokálně, Gradle 9.3.1). |
+| `gradle :app:assembleDebug` | ✅ SUCCESS | Build APK bez chyb; ověřeno i spuštění na emulátoru (Android 37.1). |
 
 ---
 
 ## 🚀 4. Plánované další kroky (Backlog)
+- [ ] **Segmentové zpracování dlouhých nahrávek**: aplikace drží celou nahrávku v paměti
+      (`FloatArray`), takže se do rozpočtu vejde přibližně 16 minut na 44,1 kHz. Pro delší záznamy
+      (např. 20minutový soubor) je potřeba pracovat po úsecích (načítat a zpracovávat okno vzorků)
+      místo celého souboru.
 - [ ] Možnost exportu spektrogramu jako snímku ve vysokém rozlišení (PNG/PDF).
 - [ ] Uživatelsky definované EQ křivky pro parametrický 5-pásmový ekvalizér.
 - [ ] Export audio stop do formátu FLAC s bezeztrátovou kompresí.

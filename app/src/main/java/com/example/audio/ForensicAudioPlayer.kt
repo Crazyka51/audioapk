@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.SystemClock
 import com.example.dsp.AudioDecoder
 import com.example.dsp.AudioDspChain
+import com.example.dsp.AudioTooLargeException
 import com.example.dsp.WavAudioData
 import com.example.dsp.WavHelper
 import com.example.model.DspConfig
@@ -140,6 +141,9 @@ class ForensicAudioPlayer(private val context: Context) {
 
             val processed = try {
                 AudioDspChain.apply(decoded.samples, decoded.sampleRate, dspConfig).samples
+            } catch (e: OutOfMemoryError) {
+                e.printStackTrace()
+                decoded.samples
             } catch (e: Exception) {
                 e.printStackTrace()
                 decoded.samples
@@ -172,6 +176,9 @@ class ForensicAudioPlayer(private val context: Context) {
             } else {
                 AudioDecoder.decodeToPcm(context, Uri.fromFile(file))
             }
+        } catch (tooLarge: AudioTooLargeException) {
+            _errorMessage.value = "Nahrávka je příliš dlouhá na analýzu. Zkrať ji na kratší úsek."
+            null
         } catch (e: Exception) {
             e.printStackTrace()
             null
@@ -477,6 +484,11 @@ class ForensicAudioPlayer(private val context: Context) {
 
             val result = try {
                 AudioDspChain.apply(source, sampleRate, cfg)
+            } catch (e: OutOfMemoryError) {
+                // A very long recording may not fit the heap with the full effect chain applied.
+                // Report it instead of letting the process die.
+                e.printStackTrace()
+                null
             } catch (e: Exception) {
                 e.printStackTrace()
                 null
@@ -486,7 +498,7 @@ class ForensicAudioPlayer(private val context: Context) {
 
             if (result == null) {
                 _playbackState.value = _playbackState.value.copy(isProcessing = false)
-                _errorMessage.value = "Chyba při výpočtu DSP náhledu"
+                _errorMessage.value = "Efekt nelze aplikovat: nahrávka je pro živý náhled příliš dlouhá"
                 return@launch
             }
 

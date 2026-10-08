@@ -9,7 +9,9 @@ import com.example.audio.ForensicAudioPlayer
 import com.example.audio.PlaybackState
 import com.example.audio.RecordingStatus
 import com.example.data.AudioDetectiveRepository
+import com.example.data.ImportResult
 import com.example.dsp.AdaptiveLmsFilter
+import com.example.dsp.AudioMemoryBudget
 import com.example.dsp.CepstralDeverbProcessor
 import com.example.dsp.FftProcessor
 import com.example.dsp.LearnedSpectralProfile
@@ -19,6 +21,7 @@ import com.example.dsp.SpectrogramResult
 import com.example.dsp.VoiceSeparationMode
 import com.example.dsp.VoiceSeparationStats
 import com.example.dsp.VoiceSeparator
+import com.example.dsp.WavHelper
 import com.example.model.AppTab
 import com.example.model.AudioFileItem
 import com.example.model.DspConfig
@@ -143,6 +146,20 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
         viewModelScope.launch(Dispatchers.IO) {
             _isLoading.value = true
             val file = File(item.filePath)
+
+            // Refuse recordings that cannot fit into the heap before decoding anything.
+            val header = WavHelper.readWavHeader(file)
+            if (header != null && header.frameCount > AudioMemoryBudget.maxFrames()) {
+                _pcmSamples.value = null
+                _spectrogram.value = null
+                _userMessage.value = "Nahrávka je příliš dlouhá na analýzu: " +
+                    "${AudioMemoryBudget.durationMinutesOf(header.frameCount, header.sampleRate)} min, " +
+                    "limit je ${AudioMemoryBudget.maxDurationMinutes(header.sampleRate)} min. " +
+                    "Zkrať ji prosím na kratší úsek."
+                _isLoading.value = false
+                return@launch
+            }
+
             val pcmData = repository.loadPcmSamples(file)
 
             if (pcmData != null) {
@@ -615,15 +632,20 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
     fun importAudioFile(uri: Uri, name: String?) {
         viewModelScope.launch {
             _isLoading.value = true
-            val imported = repository.importAudio(uri, name)
-            _isLoading.value = false
-            if (imported != null) {
-                _userMessage.value = "Audio imported successfully"
-                loadAudioFiles(autoSelectFirst = false)
-                selectAudioFile(imported)
-            } else {
-                _userMessage.value = "Failed to decode audio file format"
+            when (val result = repository.importAudio(uri, name)) {
+                is ImportResult.Success -> {
+                    _userMessage.value = "Audio imported successfully"
+                    loadAudioFiles(autoSelectFirst = false)
+                    selectAudioFile(result.item)
+                }
+                is ImportResult.TooLarge -> {
+                    _userMessage.value = "Nahrávka je příliš dlouhá (~${result.requiredMinutes} min), " +
+                        "do paměti se vejde nejvýše ~${result.limitMinutes} min. " +
+                        "Zkrať ji prosím a import zopakuj."
+                }
+                ImportResult.Failed -> _userMessage.value = "Failed to decode audio file format"
             }
+            _isLoading.value = false
         }
     }
 

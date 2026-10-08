@@ -153,7 +153,11 @@ analytik nedodá reálný důkazní materiál. Postup:
 
 ### 4.3 Recept 3: Jak bezpečně pracovat s pamětí při zpracování velkých nahrávek
 Vzhledem k tomu, že nahrávky mohou mít desítky minut:
-* **FloatArray vs DoubleArray**: V celém DSP jádru používej výhradně `Float` (32-bit), nikoli `Double` (64-bit). 10 minut 44.1 kHz mono zvuku zabere v RAM ve `FloatArray` cca **105 MB**, což je pro Android heap naprosto bezpečné.
+* **Nikdy nenačítej celý soubor do paměti**: `File.readBytes()` / `InputStream.readBytes()` na WAV soubor je zakázaný vzor. Velká nahrávka (např. 230 MB) při tom shodí aplikaci přes `OutOfMemoryError`, protože se alokuje `ByteArray` o velikosti souboru a často ještě jeho druhá kopie. Pro metadata (délka, sample rate, kanály, bitová hloubka, počet rámců) používej výhradně `WavHelper.readWavHeader()` – přečte jen RIFF hlavičku a přeskočí datový chunk. Pro vzorky pak `WavHelper.readWav()` / `WavHelper.readWavFromStream()`, které data čtou po 64kB blocích a rovnou downmixují kanály do mono.
+* **Paměťový rozpočet**: Maximální velikost PCM v paměti hlídej přes `AudioMemoryBudget` (výchozí 30 % heapu). Dekodér při překročení vyhodí `AudioTooLargeException` **před** velkou alokací, takže uživatel dostane srozumitelnou hlášku místo pádu. `android:largeHeap="true"` je v manifestu, takže strop je typicky 512–576 MB místo 192 MB.
+* **Pozor na `ArrayList<Float>`**: každý vzorek zabalí do objektu (~16 B), pro dlouhou nahrávku tedy řádově více paměti než `FloatArray`. V dekodérech používej rostoucí `FloatArray`.
+* **OOM guardy u těžkých DSP kroků**: Nejtěžší stupně (STFT separace hlasu, odečtení referenční stopy) alokují 1–2 další pole o plné délce. Tyto kroky obaluj do `runHeavyStep { }` (repository) nebo `catch (e: OutOfMemoryError)` (přehrávač), aby příliš dlouhá nahrávka zobrazila hlášku místo pádu procesu.
+* **FloatArray vs DoubleArray**: V celém DSP jádru používej výhradně `Float` (32-bit), nikoli `Double` (64-bit). 10 minut 44.1 kHz mono zvuku zabere v RAM ve `FloatArray` cca **105 MB**.
 * **Klonování polí**: Vyhni se zbytečnému volání `.clone()` nebo `.copyOf()`. Většinu operací (jako biquad filtry nebo zisk) lze provádět **in-place** přepisem vstupního pole:
   ```kotlin
   for (i in samples.indices) {

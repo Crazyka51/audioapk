@@ -1,14 +1,18 @@
 package com.example.data
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.example.dsp.AudioDecoder
 import com.example.dsp.AudioDspChain
+import com.example.dsp.AudioMemoryBudget
+import com.example.dsp.AudioTooLargeException
 import com.example.dsp.LearnedSpectralProfile
 import com.example.dsp.ReferenceAudioCanceller
 import com.example.dsp.VoiceSeparator
 import com.example.dsp.WavAudioData
+import com.example.dsp.WavHeader
 import com.example.dsp.WavHelper
 import com.example.model.AudioFileItem
 import com.example.model.AudioStatus
@@ -24,6 +28,18 @@ import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.log10
 import kotlin.math.sqrt
+
+/**
+ * Outcome of an audio import. A recording that cannot fit into the heap is reported as [TooLarge]
+ * instead of crashing the app with an OutOfMemoryError.
+ */
+sealed interface ImportResult {
+    data class Success(val item: AudioFileItem) : ImportResult
+
+    data class TooLarge(val requiredMinutes: Int, val limitMinutes: Int) : ImportResult
+
+    data object Failed : ImportResult
+}
 
 class AudioDetectiveRepository(private val context: Context) {
 
@@ -45,12 +61,12 @@ class AudioDetectiveRepository(private val context: Context) {
                 String.format(Locale.US, "%d KB", file.length() / 1024)
             }
 
-            // Inspect WAV header if available
-            val wavInfo = WavHelper.readWav(file)
-            val durMs = if (wavInfo != null && wavInfo.sampleRate > 0) {
-                (wavInfo.samples.size.toDouble() / wavInfo.sampleRate * 1000).toLong()
-            } else {
-                12000L
+            // Inspect the WAV header only - listing the library must never load audio payloads.
+            val wavHeader = WavHelper.readWavHeader(file)
+            val durMs = when {
+                wavHeader != null && wavHeader.sampleRate > 0 ->
+                    (wavHeader.frameCount.toDouble() / wavHeader.sampleRate * 1000).toLong()
+                else -> readDurationMsWithoutWavHeader(file)
             }
 
             val status = when {
@@ -68,26 +84,76 @@ class AudioDetectiveRepository(private val context: Context) {
                 filePath = file.absolutePath,
                 durationMs = durMs,
                 fileSizeFormatted = sizeFormatted,
-                sampleRate = wavInfo?.sampleRate ?: 44100,
-                bitDepth = wavInfo?.bitsPerSample ?: 16,
-                channels = wavInfo?.channels ?: 1,
+                sampleRate = wavHeader?.sampleRate ?: 44100,
+                bitDepth = wavHeader?.bitsPerSample ?: 16,
+                channels = wavHeader?.channels ?: 1,
                 status = status,
                 createdAt = file.lastModified()
             )
         }
     }
 
-    suspend fun loadPcmSamples(file: File): WavAudioData? = withContext(Dispatchers.IO) {
-        if (!file.exists()) return@withContext null
-        if (file.name.endsWith(".wav", ignoreCase = true)) {
-            WavHelper.readWav(file)
-        } else {
-            AudioDecoder.decodeToPcm(context, Uri.fromFile(file))
+    /**
+     * Reads the playback length of a file that is not a readable WAV, using the platform metadata
+     * reader so the library list never has to decode audio.
+     */
+    private fun readDurationMsWithoutWavHeader(file: File): Long {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(file.absolutePath)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+        } catch (e: Exception) {
+            0L
+        } finally {
+            try {
+                retriever.release()
+            } catch (ignored: Exception) {
+            }
         }
     }
 
-    suspend fun importAudio(uri: Uri, originalName: String?): AudioFileItem? = withContext(Dispatchers.IO) {
-        val decoded = AudioDecoder.decodeToPcm(context, uri) ?: return@withContext null
+    suspend fun loadPcmSamples(
+        file: File,
+        maxFrames: Long = AudioMemoryBudget.maxFrames()
+    ): WavAudioData? = withContext(Dispatchers.IO) {
+        if (!file.exists()) return@withContext null
+        try {
+            if (file.name.endsWith(".wav", ignoreCase = true)) {
+                WavHelper.readWav(file, maxFrames)
+            } else {
+                AudioDecoder.decodeToPcm(context, Uri.fromFile(file), maxFrames)
+            }
+        } catch (tooLarge: AudioTooLargeException) {
+            // Callers report the length limit themselves; never let this escape into a coroutine.
+            null
+        }
+    }
+
+    /**
+     * Runs a heavy DSP stage, converting an OutOfMemoryError into null so the caller can report a
+     * failure instead of the process being killed. The heaviest stages allocate one or two extra
+     * full-length buffers, which very long recordings may not have room for.
+     */
+    private fun <T> runHeavyStep(block: () -> T): T? = try {
+        block()
+    } catch (e: OutOfMemoryError) {
+        e.printStackTrace()
+        null
+    }
+
+    suspend fun importAudio(uri: Uri, originalName: String?): ImportResult = withContext(Dispatchers.IO) {
+        val decoded = try {
+            AudioDecoder.decodeToPcm(context, uri)
+        } catch (tooLarge: AudioTooLargeException) {
+            val sampleRate = readWavHeaderFromUri(uri)?.sampleRate ?: 44100
+            return@withContext ImportResult.TooLarge(
+                requiredMinutes = AudioMemoryBudget.durationMinutesOf(
+                    tooLarge.requiredPcmBytes / Float.SIZE_BYTES,
+                    sampleRate
+                ),
+                limitMinutes = AudioMemoryBudget.maxDurationMinutes(sampleRate)
+            )
+        } ?: return@withContext ImportResult.Failed
         val resolvedName = originalName ?: resolveDisplayName(uri) ?: "Imported_${System.currentTimeMillis()}"
         val safeName = resolvedName
             .substringBeforeLast(".")
@@ -101,19 +167,27 @@ class AudioDetectiveRepository(private val context: Context) {
         val sizeMb = targetFile.length() / (1024.0 * 1024.0)
         val durMs = (decoded.samples.size.toDouble() / decoded.sampleRate * 1000).toLong()
 
-        AudioFileItem(
-            id = targetFile.absolutePath.hashCode().toString(),
-            title = safeName,
-            fileName = targetFile.name,
-            filePath = targetFile.absolutePath,
-            durationMs = durMs,
-            fileSizeFormatted = String.format(Locale.US, "%.1f MB", sizeMb),
-            sampleRate = decoded.sampleRate,
-            bitDepth = 16,
-            channels = 1,
-            status = AudioStatus.ORIGINAL,
-            createdAt = targetFile.lastModified()
+        ImportResult.Success(
+            AudioFileItem(
+                id = targetFile.absolutePath.hashCode().toString(),
+                title = safeName,
+                fileName = targetFile.name,
+                filePath = targetFile.absolutePath,
+                durationMs = durMs,
+                fileSizeFormatted = String.format(Locale.US, "%.1f MB", sizeMb),
+                sampleRate = decoded.sampleRate,
+                bitDepth = 16,
+                channels = 1,
+                status = AudioStatus.ORIGINAL,
+                createdAt = targetFile.lastModified()
+            )
         )
+    }
+
+    private fun readWavHeaderFromUri(uri: Uri): WavHeader? = try {
+        context.contentResolver.openInputStream(uri)?.use { WavHelper.readWavHeader(it) }
+    } catch (e: Exception) {
+        null
     }
 
     private fun resolveDisplayName(uri: Uri): String? {
@@ -135,7 +209,10 @@ class AudioDetectiveRepository(private val context: Context) {
         customSuffix: String = "Cleaned"
     ): AudioFileItem? = withContext(Dispatchers.IO) {
         val rawData = loadPcmSamples(sourceFile) ?: return@withContext null
-        val samples = AudioDspChain.apply(rawData.samples, rawData.sampleRate, config).samples
+        val chainResult = runHeavyStep {
+            AudioDspChain.apply(rawData.samples, rawData.sampleRate, config)
+        } ?: return@withContext null
+        val samples = chainResult.samples
 
         val baseName = sourceFile.nameWithoutExtension
             .substringBefore("_Cleaned")
@@ -290,27 +367,31 @@ class AudioDetectiveRepository(private val context: Context) {
     ): LearnedSpectralProfile? = withContext(Dispatchers.Default) {
         val refData = loadPcmSamples(referenceFile) ?: return@withContext null
         val canceller = ReferenceAudioCanceller(fftSize = 1024, hopSize = 256, sampleRate = refData.sampleRate)
-        canceller.learnFromReferenceTrack(
-            referenceSamples = refData.samples,
-            referenceSampleRate = refData.sampleRate,
-            referenceTitle = referenceFile.nameWithoutExtension,
-            targetSamples = targetSamples
-        )
+        runHeavyStep {
+            canceller.learnFromReferenceTrack(
+                referenceSamples = refData.samples,
+                referenceSampleRate = refData.sampleRate,
+                referenceTitle = referenceFile.nameWithoutExtension,
+                targetSamples = targetSamples
+            )
+        }
     }
 
     suspend fun learnProfileFromReferenceUri(
         uri: Uri,
         targetSamples: FloatArray?
     ): LearnedSpectralProfile? = withContext(Dispatchers.IO) {
-        val decoded = AudioDecoder.decodeToPcm(context, uri) ?: return@withContext null
+        val decoded = runHeavyStep { AudioDecoder.decodeToPcm(context, uri) } ?: return@withContext null
         val displayName = resolveDisplayName(uri)?.substringBeforeLast(".") ?: "Referencni_Skladba"
         val canceller = ReferenceAudioCanceller(fftSize = 1024, hopSize = 256, sampleRate = decoded.sampleRate)
-        canceller.learnFromReferenceTrack(
-            referenceSamples = decoded.samples,
-            referenceSampleRate = decoded.sampleRate,
-            referenceTitle = displayName,
-            targetSamples = targetSamples
-        )
+        runHeavyStep {
+            canceller.learnFromReferenceTrack(
+                referenceSamples = decoded.samples,
+                referenceSampleRate = decoded.sampleRate,
+                referenceTitle = displayName,
+                targetSamples = targetSamples
+            )
+        }
     }
 
     suspend fun subtractLearnedProfileAndSave(
@@ -323,14 +404,16 @@ class AudioDetectiveRepository(private val context: Context) {
     ): AudioFileItem? = withContext(Dispatchers.Default) {
         val rawData = loadPcmSamples(sourceFile) ?: return@withContext null
         val canceller = ReferenceAudioCanceller(fftSize = 1024, hopSize = 256, sampleRate = rawData.sampleRate)
-        val cleanedSamples = canceller.applyProfileSubtraction(
-            targetSamples = rawData.samples,
-            profile = profile,
-            attenuationStrength = attenuationStrength,
-            spectralMatchGain = spectralMatchGain,
-            timeOffsetMs = timeOffsetMs,
-            protectVoiceFormants = protectVoiceFormants
-        )
+        val cleanedSamples = runHeavyStep {
+            canceller.applyProfileSubtraction(
+                targetSamples = rawData.samples,
+                profile = profile,
+                attenuationStrength = attenuationStrength,
+                spectralMatchGain = spectralMatchGain,
+                timeOffsetMs = timeOffsetMs,
+                protectVoiceFormants = protectVoiceFormants
+            )
+        } ?: return@withContext null
 
         val baseName = sourceFile.nameWithoutExtension
             .substringBefore("_Cleaned")
