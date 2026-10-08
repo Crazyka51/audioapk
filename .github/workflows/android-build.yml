@@ -1,0 +1,74 @@
+name: Android CI
+
+# Builds a debug APK that can be downloaded from the run's Artifacts section.
+#
+# Expo is not applicable here: this is a native Android (Kotlin + Jetpack Compose)
+# application, not a React Native / JavaScript project. The only realistic way to
+# produce an installable build without a local Android SDK is this CI pipeline.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-debug-apk:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          # Matches gradle/wrapper/gradle-wrapper.properties (wrapper jar is not committed).
+          gradle-version: "9.3.1"
+
+      - name: Assemble debug APK
+        run: gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AudioDetective-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      # Unit tests are reported separately and must not block the APK artifact.
+      - name: Run unit tests
+        id: unit_tests
+        continue-on-error: true
+        run: gradle :app:testDebugUnitTest --stacktrace --no-daemon
+
+      - name: Upload unit test reports
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: AudioDetective-unit-test-reports
+          path: app/build/reports/tests/**
+          if-no-files-found: ignore
+          retention-days: 14

@@ -110,6 +110,15 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
 
     init {
         loadAudioFiles()
+        // Surface decode/playback failures from the AudioTrack engine as user-facing snackbars.
+        viewModelScope.launch {
+            player.errorMessage.collect { message ->
+                if (message != null) {
+                    _userMessage.value = message
+                    player.clearError()
+                }
+            }
+        }
     }
 
     fun loadAudioFiles(autoSelectFirst: Boolean = true) {

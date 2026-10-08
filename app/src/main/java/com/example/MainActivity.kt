@@ -226,6 +226,7 @@ fun MainAppScreen(viewModel: AudioDetectiveViewModel) {
                     viewModel = viewModel,
                     selectedAudio = selectedAudio,
                     isPlaying = playbackState.isPlaying,
+                    isProcessing = playbackState.isProcessing,
                     currentPositionMs = playbackState.currentPositionMs,
                     durationMs = playbackState.durationMs,
                     pcmSamples = pcmSamples,

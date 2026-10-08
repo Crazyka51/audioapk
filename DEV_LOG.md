@@ -93,6 +93,18 @@ Implementovány dva pokročilé algoritmy pro extrémní situace, kde běžné b
 
 ---
 
+### 🔹 Fáze 9: Živý DSP náhled při přehrávání (AudioTrack engine)
+Dosavadní přehrávání běželo přes `MediaPlayer`, který neumí aplikovat žádné DSP. Efekty se projevily až při exportu vyčištěné kopie, takže analytik neslyšel výsledek filtru v reálném čase. Fáze 9 tento rozpor odstraňuje:
+
+1. **Sdílený DSP řetězec (`AudioDspChain.kt`)**: Veškerá logika racku (STFT separace hlasu, HPF/LPF, spektrální brána, adaptivní LMS, cepstrální de-reverberace, whisper boost) je přesunuta do jedné stateless funkce. Používá ji jak export (`AudioDetectiveRepository.processAndSaveFilteredWav`), tak živý náhled. Tím je zaručeno, že **to, co analytik slyší, je přesně to, co se uloží na disk** (zásadní pro forenzní reprodukovatelnost).
+2. **`ForensicAudioPlayer` přepsán na `AudioTrack`**: Audio se dekóduje do PCM, prožene sdíleným řetězcem a streamuje přes `AudioTrack` ve float chuncích s nízkou latencí.
+3. **Živé přepočítání efektů**: Každá změna přepínače/posuvníku vyvolá debounced přepočet (150 ms) na pozadí. Pozice přehrávání se zachová a streamovací writer se plynule restartuje na stejném místě, takže změna je slyšet okamžitě.
+4. **Zachovaná funkčnost transportu**: Rychlost 0.5x–1.5x s uzamčeným pitch přes `AudioTrack.setPlaybackParams`, přesné hledání, vzorkově přesná A-B smyčka a korektní detekce konce nahrávky.
+5. **Chybová zpětná vazba**: Chyby dekódování/inicializace audio výstupu se už nepolykají přes `printStackTrace`, ale jsou vystaveny přes `errorMessage` a zobrazují se jako snackbar.
+6. **Indikátor zpracování**: Studio zobrazuje nenápadný indikátor „Zpracovávám DSP náhled…“, dokud přepočet neběží.
+
+---
+
 ## 🧪 3. Testování a verifikace
 
 | Testovací sada | Výsledek | Popis |

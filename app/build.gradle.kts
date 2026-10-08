@@ -30,12 +30,6 @@ android {
       keyAlias = "upload"
       keyPassword = System.getenv("KEY_PASSWORD")
     }
-    create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
-    }
   }
 
   buildTypes {
@@ -45,7 +39,10 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
-    debug { signingConfig = signingConfigs.getByName("debugConfig") }
+    // Debug builds intentionally use the default debug signing config (the auto-generated
+    // ~/.android/debug.keystore). The previous hardcoded "debugConfig" pointed at a
+    // rootDir/debug.keystore that is gitignored, which broke fresh clones and CI builds.
+    debug { }
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11

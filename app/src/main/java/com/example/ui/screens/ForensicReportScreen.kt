@@ -38,10 +38,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.model.ForensicReport
 import com.example.ui.theme.ForensicCyan
 import com.example.ui.theme.ForensicDarkBackground
@@ -64,6 +66,7 @@ fun ForensicReportScreen(
 ) {
     val context = LocalContext.current
     val scrollState = rememberScrollState()
+    val appName = stringResource(R.string.app_name).uppercase(Locale.US)
 
     Box(
         modifier = modifier
@@ -151,7 +154,7 @@ fun ForensicReportScreen(
                                 putExtra(
                                     Intent.EXTRA_TEXT,
                                     """
-                                    --- AUDIODETECTIVE PRO FORENSIC EXAMINATION REPORT ---
+                                    --- $appName FORENSIC EXAMINATION REPORT ---
                                     Target Audio: ${report.fileTitle}
                                     Examination Date: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(report.timestamp))}
                                     Format: ${report.sampleRate} Hz, ${report.bitDepth}-bit PCM Mono

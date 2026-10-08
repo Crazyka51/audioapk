@@ -46,13 +46,15 @@ Tento dokument slouží jako komplexní technická a produktová „kuchařka“
 app/src/main/java/com/example/
 ├── MainActivity.kt               # Vstupní bod aplikace, správa Edge-to-Edge a NavHostu
 ├── audio/
-│   ├── AudioPlayerManager.kt     # Správa AudioTrack přehrávání a streamování
-│   └── ForensicAudioPlayer.kt    # Přesný transport, podpora A-B smyčky, pitch/speed (0.5x–1.5x)
+│   ├── AudioRecorderManager.kt   # Záznam přes AudioRecord (44.1 kHz / 16-bit mono PCM)
+│   └── ForensicAudioPlayer.kt    # AudioTrack streaming engine + živý DSP náhled celého
+│                                 #   racku, přesný transport, A-B smyčka, pitch-locked speed
 ├── data/
 │   └── AudioDetectiveRepository.kt # Práce se soubory v lokálním úložišti, metadata, správa stop
 ├── dsp/
 │   ├── AdaptiveLmsFilter.kt      # Adaptivní Leaky NLMS filtr pro proměnlivý hluk (auta, vítr)
 │   ├── AudioDecoder.kt           # Univerzální dekodér audio formátů do FloatArray PCM
+│   ├── AudioDspChain.kt          # Sdílený DSP řetězec (export i živý náhled) – jediný zdroj pravdy
 │   ├── BiquadFilter.kt           # IIR filtry 2. řádu (HPF, LPF, Speech Bandpass, Notch)
 │   ├── CepstralDeverbProcessor.kt# Cepstrální analýza odrazů a inverzní hřebenový de-reverb filtr
 │   ├── FftProcessor.kt           # Radix-2 Cooley-Tukey FFT, Hanningovo okno, spektrální analýza

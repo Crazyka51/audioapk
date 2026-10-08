@@ -9,6 +9,45 @@ import kotlin.math.sin
 object SyntheticAudioGenerator {
 
     /**
+     * Configuration of one built-in synthetic sample recording generated on first launch.
+     *
+     * @param fileName target file name inside the app recordings directory.
+     * @param durationSec duration of the generated audio in seconds.
+     * @param generate generator function `(file, sampleRate, durationSec) -> Unit`.
+     */
+    data class SampleSpec(
+        val fileName: String,
+        val durationSec: Float,
+        val generate: (File, Int, Float) -> Unit
+    )
+
+    /**
+     * Canonical registry of all built-in synthetic sample recordings.
+     *
+     * This is the single source of truth: [com.example.data.AudioDetectiveRepository]
+     * uses it both to generate the samples on first launch and to flag them as sample
+     * tracks (`AudioFileItem.isSample`).
+     */
+    val SAMPLE_SPECS: List<SampleSpec> = listOf(
+        SampleSpec("Interview_01.wav", 14.0f, ::generateInterviewCase),
+        SampleSpec("Suspect_Whisper_Enhance.wav", 12.5f, ::generateWhisperCase),
+        SampleSpec("Surveillance_Room4_Hum.wav", 10.0f, ::generateVentilatorDroneCase),
+        SampleSpec("Lecture_Noise_Sample.wav", 22.0f, ::generateInterviewCase),
+        SampleSpec("Cafe_Wiretap_With_Song.wav", 12.0f, ::generateCafeWiretapWithSong),
+        SampleSpec("Known_Radio_Song_Reference.wav", 12.0f, ::generateKnownSongReference),
+        SampleSpec("Bathroom_Tiles_Echo_Case.wav", 11.0f, ::generateBathroomEchoCase),
+        SampleSpec("Street_Traffic_Dynamic_Noise.wav", 12.0f, ::generateDynamicTrafficNoiseCase)
+    )
+
+    /** File names of all built-in synthetic samples (single source of truth for `isSample`). */
+    val SAMPLE_FILE_NAMES: Set<String> = SAMPLE_SPECS.map { it.fileName }.toSet()
+
+    /**
+     * Returns true when [fileName] belongs to a built-in synthetic sample recording.
+     */
+    fun isSampleFile(fileName: String): Boolean = fileName in SAMPLE_FILE_NAMES
+
+    /**
      * Generates a realistic forensic scenario: Hidden whisper buried under heavy low-frequency motor hum.
      */
     fun generateWhisperCase(file: File, sampleRate: Int = 44100, durationSec: Float = 12.5f) {

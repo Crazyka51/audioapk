@@ -49,9 +49,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.model.AudioFileItem
 import com.example.ui.components.AudioCardItem
 import com.example.ui.theme.ForensicCyan
@@ -122,7 +124,7 @@ fun DashboardScreen(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "AudioDetective Pro",
+                            text = stringResource(R.string.app_name),
                             style = MaterialTheme.typography.titleLarge,
                             color = ForensicTextPrimary,
                             fontWeight = FontWeight.Bold,

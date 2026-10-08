@@ -3,19 +3,14 @@ package com.example.data
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
-import com.example.dsp.AdaptiveLmsFilter
 import com.example.dsp.AudioDecoder
-import com.example.dsp.BiquadFilter
-import com.example.dsp.CepstralDeverbProcessor
-import com.example.dsp.FilterType
+import com.example.dsp.AudioDspChain
 import com.example.dsp.LearnedSpectralProfile
 import com.example.dsp.ReferenceAudioCanceller
-import com.example.dsp.SpectralNoiseGate
 import com.example.dsp.SyntheticAudioGenerator
 import com.example.dsp.VoiceSeparator
 import com.example.dsp.WavAudioData
 import com.example.dsp.WavHelper
-import com.example.dsp.WhisperCompressor
 import com.example.model.AudioFileItem
 import com.example.model.AudioStatus
 import com.example.model.DspConfig
@@ -81,7 +76,7 @@ class AudioDetectiveRepository(private val context: Context) {
                 channels = wavInfo?.channels ?: 1,
                 status = status,
                 createdAt = file.lastModified(),
-                isSample = file.name.startsWith("Interview_") || file.name.startsWith("Suspect_") || file.name.startsWith("Surveillance_")
+                isSample = SyntheticAudioGenerator.isSampleFile(file.name)
             )
         }
     }
@@ -144,78 +139,7 @@ class AudioDetectiveRepository(private val context: Context) {
         customSuffix: String = "Cleaned"
     ): AudioFileItem? = withContext(Dispatchers.IO) {
         val rawData = loadPcmSamples(sourceFile) ?: return@withContext null
-        var samples = rawData.samples.clone()
-        val sampleRate = rawData.sampleRate.toFloat()
-
-        val appliedFilters = mutableListOf<String>()
-
-        // 0. STFT Voice Separation (Formant & Wiener Spectral Masking)
-        if (config.voiceSeparationEnabled) {
-            val separator = VoiceSeparator(fftSize = 1024, hopSize = 256, sampleRate = rawData.sampleRate)
-            samples = separator.separate(
-                samples = samples,
-                mode = config.voiceSeparationMode,
-                separationStrength = config.voiceSeparationStrength,
-                formantBoostDb = config.vocalFormantBoostDb
-            )
-            appliedFilters.add("Voice Separation: ${config.voiceSeparationMode.titleCz} (${(config.voiceSeparationStrength * 100).toInt()}%)")
-        }
-
-        // 1. High-Pass Filter (Voice isolation)
-        if (config.highPassEnabled || config.speechBandpassEnabled) {
-            val cutoff = if (config.speechBandpassEnabled) 300f else config.highPassCutoffHz
-            val hpf = BiquadFilter(FilterType.HIGH_PASS, cutoff, sampleRate)
-            samples = hpf.processBuffer(samples)
-            appliedFilters.add("High-Pass Filter (${cutoff.toInt()} Hz)")
-        }
-
-        // 2. Low-Pass Filter
-        if (config.lowPassEnabled || config.speechBandpassEnabled) {
-            val cutoff = if (config.speechBandpassEnabled) 4000f else config.lowPassCutoffHz
-            val lpf = BiquadFilter(FilterType.LOW_PASS, cutoff, sampleRate)
-            samples = lpf.processBuffer(samples)
-            appliedFilters.add("Low-Pass Filter (${cutoff.toInt()} Hz)")
-        }
-
-        // 3. Spectral Noise Reduction (Fan / Hum gate)
-        if (config.noiseReductionEnabled) {
-            val noiseGate = SpectralNoiseGate(fftSize = 1024, hopSize = 256, sampleRate = rawData.sampleRate)
-            samples = noiseGate.process(samples, config.noiseReductionLevel)
-            appliedFilters.add("Spectral Noise Gate (${(config.noiseReductionLevel * 100).toInt()}%)")
-        }
-
-        // 3B. Adaptive LMS Filter (Dynamic Non-Stationary Noise, traffic, barking)
-        if (config.adaptiveLmsEnabled) {
-            val lmsFilter = AdaptiveLmsFilter()
-            samples = lmsFilter.process(
-                samples = samples,
-                filterIntensity = config.adaptiveLmsIntensity,
-                speechPreservation = config.adaptiveLmsSpeechPreserve
-            )
-            appliedFilters.add("Adaptive LMS Filter (${(config.adaptiveLmsIntensity * 100).toInt()}%)")
-        }
-
-        // 3C. Cepstral De-reverberation (Inverse Comb Filter for empty room / bathroom echo)
-        if (config.deverbEnabled) {
-            val deverbProcessor = CepstralDeverbProcessor(fftSize = 2048, sampleRate = rawData.sampleRate)
-            samples = deverbProcessor.process(
-                samples = samples,
-                deverbStrength = config.deverbStrength,
-                manualDelayMs = config.deverbManualDelayMs
-            )
-            appliedFilters.add("Cepstral De-reverberation (${(config.deverbStrength * 100).toInt()}%)")
-        }
-
-        // 4. Whisper Dynamic Boost
-        if (config.whisperBoostEnabled) {
-            val booster = WhisperCompressor(
-                boostGainDb = config.whisperBoostGainDb,
-                thresholdDb = config.whisperThresholdDb,
-                sampleRate = sampleRate
-            )
-            samples = booster.process(samples)
-            appliedFilters.add("Whisper Dynamic Boost (+${config.whisperBoostGainDb.toInt()} dB)")
-        }
+        val samples = AudioDspChain.apply(rawData.samples, rawData.sampleRate, config).samples
 
         val baseName = sourceFile.nameWithoutExtension
             .substringBefore("_Cleaned")
@@ -459,44 +383,11 @@ class AudioDetectiveRepository(private val context: Context) {
     }
 
     private fun ensureInitialSamples() {
-        val file1 = File(recordingsDir, "Interview_01.wav")
-        if (!file1.exists()) {
-            SyntheticAudioGenerator.generateInterviewCase(file1, 44100, 14.0f)
-        }
-
-        val file2 = File(recordingsDir, "Suspect_Whisper_Enhance.wav")
-        if (!file2.exists()) {
-            SyntheticAudioGenerator.generateWhisperCase(file2, 44100, 12.5f)
-        }
-
-        val file3 = File(recordingsDir, "Surveillance_Room4_Hum.wav")
-        if (!file3.exists()) {
-            SyntheticAudioGenerator.generateVentilatorDroneCase(file3, 44100, 10.0f)
-        }
-
-        val file4 = File(recordingsDir, "Lecture_Noise_Sample.wav")
-        if (!file4.exists()) {
-            SyntheticAudioGenerator.generateInterviewCase(file4, 44100, 22.0f)
-        }
-
-        val file5 = File(recordingsDir, "Cafe_Wiretap_With_Song.wav")
-        if (!file5.exists()) {
-            SyntheticAudioGenerator.generateCafeWiretapWithSong(file5, 44100, 12.0f)
-        }
-
-        val file6 = File(recordingsDir, "Known_Radio_Song_Reference.wav")
-        if (!file6.exists()) {
-            SyntheticAudioGenerator.generateKnownSongReference(file6, 44100, 12.0f)
-        }
-
-        val file7 = File(recordingsDir, "Bathroom_Tiles_Echo_Case.wav")
-        if (!file7.exists()) {
-            SyntheticAudioGenerator.generateBathroomEchoCase(file7, 44100, 11.0f)
-        }
-
-        val file8 = File(recordingsDir, "Street_Traffic_Dynamic_Noise.wav")
-        if (!file8.exists()) {
-            SyntheticAudioGenerator.generateDynamicTrafficNoiseCase(file8, 44100, 12.0f)
+        SyntheticAudioGenerator.SAMPLE_SPECS.forEach { spec ->
+            val file = File(recordingsDir, spec.fileName)
+            if (!file.exists()) {
+                spec.generate(file, 44100, spec.durationSec)
+            }
         }
     }
 }
