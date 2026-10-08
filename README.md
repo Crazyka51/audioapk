@@ -43,6 +43,18 @@ Každá nově vytvořená (vyčištěná) stopa se kromě interní knihovny apli
 veřejné složky **`Music/AudioDetective`**, takže je vidět ve správci souborů i v hudebním
 přehrávači. Potvrzení v aplikaci vypíše přesnou cestu.
 
+Soubor tedy existuje na dvou místech, což je záměr – interní kopie drží nedestruktivní
+workflow a přehrávání, veřejná je pro uživatele:
+
+| Kopie | Cesta na zařízení | K čemu |
+| --- | --- | --- |
+| Interní knihovna | `/data/data/com.aistudio.audiodetective.fznr/files/recordings/` | záznam v knihovně, přehrávání, navazující úpravy |
+| Veřejný export | `/storage/emulated/0/Music/AudioDetective/` (též `/sdcard/Music/AudioDetective/`) | soubor pro uživatele – správce souborů, hudební přehrávač, přenos z telefonu |
+
+V Android Studiu obě najdeš v **Device Exploreru** (`View → Tool Windows → Device Explorer`).
+Interní cesta je přístupná jen u debug buildu, protože Device Explorer využívá `run-as`;
+u release buildu ji systém nezpřístupní, a proto export do veřejné složky existuje.
+
 - **Android 10+**: zápis přes MediaStore, bez oprávnění.
 - **Android 9 a nižší**: přímý zápis + indexace mediálním skenerem, vyžaduje
   `WRITE_EXTERNAL_STORAGE` (deklarováno s `maxSdkVersion="28"`, aplikace si ho vyžádá při startu).
