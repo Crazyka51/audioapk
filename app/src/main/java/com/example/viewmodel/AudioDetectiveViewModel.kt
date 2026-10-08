@@ -9,6 +9,8 @@ import com.example.audio.ForensicAudioPlayer
 import com.example.audio.PlaybackState
 import com.example.audio.RecordingStatus
 import com.example.data.AudioDetectiveRepository
+import com.example.data.AudioExporter
+import com.example.data.ExportResult
 import com.example.data.ImportResult
 import com.example.dsp.AdaptiveLmsFilter
 import com.example.dsp.AudioMemoryBudget
@@ -340,7 +342,8 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
             val newTrack = repository.processAndSaveFilteredWav(sourceFile, activeConfig, "Deverbed")
             _isLoading.value = false
             if (newTrack != null) {
-                _userMessage.value = "Ozvěna odstraněna: ${newTrack.fileName}"
+                val note = publishToDevice(newTrack)
+                _userMessage.value = "Ozvěna odstraněna: ${newTrack.fileName}$note"
                 loadAudioFiles(autoSelectFirst = false)
                 selectAudioFile(newTrack)
             } else {
@@ -379,7 +382,8 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
             val newTrack = repository.processAndSaveFilteredWav(sourceFile, activeConfig, "LmsCleaned")
             _isLoading.value = false
             if (newTrack != null) {
-                _userMessage.value = "Dynamický šum potlačen: ${newTrack.fileName}"
+                val note = publishToDevice(newTrack)
+                _userMessage.value = "Dynamický šum potlačen: ${newTrack.fileName}$note"
                 loadAudioFiles(autoSelectFirst = false)
                 selectAudioFile(newTrack)
             } else {
@@ -403,7 +407,8 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
             val newTrack = repository.processAndSaveFilteredWav(sourceFile, activeConfig, suffix)
             _isLoading.value = false
             if (newTrack != null) {
-                _userMessage.value = "Hlas separován: ${newTrack.fileName}"
+                val note = publishToDevice(newTrack)
+                _userMessage.value = "Hlas separován: ${newTrack.fileName}$note"
                 loadAudioFiles(autoSelectFirst = false)
                 selectAudioFile(newTrack)
             } else {
@@ -511,7 +516,8 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
             )
             _isLoading.value = false
             if (cleanedTrack != null) {
-                _userMessage.value = "Nahrávka vyčištěna od vzorku/hudby: ${cleanedTrack.fileName}"
+                val note = publishToDevice(cleanedTrack)
+                _userMessage.value = "Nahrávka vyčištěna od vzorku/hudby: ${cleanedTrack.fileName}$note"
                 loadAudioFiles(autoSelectFirst = false)
                 selectAudioFile(cleanedTrack)
             } else {
@@ -576,7 +582,8 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
             val newTrack = repository.processAndSaveFilteredWav(sourceFile, _dspConfig.value, suffix)
             _isLoading.value = false
             if (newTrack != null) {
-                _userMessage.value = "Saved cleaned copy: ${newTrack.title}.wav"
+                val note = publishToDevice(newTrack)
+                _userMessage.value = "Saved cleaned copy: ${newTrack.title}.wav$note"
                 loadAudioFiles(autoSelectFirst = false)
                 selectAudioFile(newTrack)
             } else {
@@ -584,6 +591,19 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
             }
         }
     }
+
+    /**
+     * Copies a freshly produced working copy into the shared `Music/AudioDetective` folder and
+     * reports where it landed, so export destinations are visible in the confirmation message.
+     */
+    private suspend fun publishToDevice(item: AudioFileItem): String =
+        when (val result = repository.exportToDevice(File(item.filePath), item.fileName)) {
+            is ExportResult.Success -> " → ${result.location}"
+            ExportResult.PermissionRequired ->
+                " (soubor zůstal jen v aplikaci – pro uložení do ${AudioExporter.displayLocation} povol přístup k úložišti)"
+            ExportResult.Failed ->
+                " (uložení do ${AudioExporter.displayLocation} se nezdařilo)"
+        }
 
     fun generateForensicReport() {
         val selected = _selectedAudio.value ?: return

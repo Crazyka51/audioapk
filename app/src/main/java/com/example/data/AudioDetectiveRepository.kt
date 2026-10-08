@@ -94,6 +94,14 @@ class AudioDetectiveRepository(private val context: Context) {
     }
 
     /**
+     * Publishes a finished working copy into the shared `Music/AudioDetective` folder (MediaStore on
+     * Android 10+, direct file write below) so the export is visible outside the app sandbox.
+     */
+    suspend fun exportToDevice(file: File, displayName: String): ExportResult = withContext(Dispatchers.IO) {
+        AudioExporter.publishWav(context, file, displayName)
+    }
+
+    /**
      * Reads the playback length of a file that is not a readable WAV, using the platform metadata
      * reader so the library list never has to decode audio.
      */

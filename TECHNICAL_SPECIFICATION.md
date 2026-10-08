@@ -23,6 +23,7 @@ Tento dokument slouží jako komplexní technická a produktová „kuchařka“
 ### 1.3 Hlavní produktové pilíře
 * **100% Offline autonomie:** Žádná data nikdy neopouštějí zařízení. Všechny FFT výpočty a DSP filtry běží v nativním Kotlinu na procesoru zařízení.
 * **Nedestruktivní workflow:** Původní důkazní nahrávka je chráněna jako Read-Only. Každá úprava vytváří novou forenzní pracovní stopu s jasným pojmenováním (`_Cleaned.wav`, `_SongRemoved.wav`, `_Deverbed.wav`).
+* **Export do zařízení:** Každá vytvořená stopa se navíc publikuje do veřejné složky **`Music/AudioDetective`**, takže je viditelná ve správci souborů i v hudebních přehrávačích (Android 10+ přes MediaStore, Android 9- přímým zápisem s `WRITE_EXTERNAL_STORAGE`).
 * **Vizuální diagnostika v reálném čase:** Duální zobrazení – časová osa (RMS osciloskop s prosvětlením) a spodní spektrální tepelná mapa (60 FPS FFT spektrogram) s dotykovou sondou frekvencí a decibelů.
 * **Forenzní certifikace:** Automatické generování úředního protokolu o akustickém zpracování s metrikami zlepšení SNR a přehledem aplikovaných filtrů.
 

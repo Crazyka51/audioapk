@@ -152,6 +152,33 @@ a následná druhá kopie pole, ke které se teprve stavěl výsledný `FloatArr
 
 ---
 
+### 🔹 Fáze 12: Export do veřejné složky `Music/AudioDetective`
+Vyčištěné stopy se dosud ukládaly **jen do interního sandboxu aplikace**
+(`filesDir/recordings`), takže je uživatel v žádném správci souborů ani hudebním přehrávači
+nenašel – „export“ fakticky nikam nevedl.
+
+**Provedená změna (`data/AudioExporter.kt`):**
+
+1. **Každá nově vytvořená pracovní stopa se publikuje** do veřejné složky
+   `Music/AudioDetective` – týká se to exportu z Dashboardu, čištění ve Studiu i v Effects
+   (separace hlasu, de-reverb, LMS, odečtení referenčního vzorku).
+2. **Android 10+ zapisuje přes MediaStore** (`RELATIVE_PATH = Music/AudioDetective`,
+   `IS_PENDING` během zápisu), takže není potřeba žádné oprávnění. **Android 9 a nižší** zapisuje
+   soubor přímo a nechá ho přes `MediaScannerConnection` zaindexovat; vyžaduje
+   `WRITE_EXTERNAL_STORAGE` (deklarováno s `maxSdkVersion="28"`, vyžádáno při startu).
+3. **Kopírování po 64kB blocích** ze souboru do souboru – export obří nahrávky tedy nikdy
+   nenačítá celý obsah do paměti (navazuje na Fázi 11).
+4. **Kolize názvů se neřeší přepsáním**: na Androidu 9- se přidává `_1`, `_2`, … (viz
+   `AudioExporter.uniqueTarget`), na Androidu 10+ deduplikuje MediaStore.
+5. **Potvrzení obsahuje cílovou cestu**: snackbar hlásí např.
+   `Saved cleaned copy: ….wav → Music/AudioDetective/….wav`.
+6. **Testy**: `AudioExporterTest` ověřuje pojmenování cílů a název cílové složky.
+
+Interní kopie v knihovně aplikace zůstává zachována, aby fungovalo nedestruktivní workflow
+a přehrávání; export je navíc plnohodnotná kopie pro uživatele (MD5 obou souborů je shodné).
+
+---
+
 ## 🧪 3. Testování a verifikace
 
 | Testovací sada | Výsledek | Popis |
@@ -165,8 +192,10 @@ a následná druhá kopie pole, ke které se teprve stavěl výsledný `FloatArr
 | `DspUnitTest.testAdaptiveLmsFilter_attenuatesDynamicNoise` | ✅ PASSED | Ověření adaptivní NLMS konvergence a potlačení proměnlivého hluku projíždějících vozidel. |
 | `ExampleRobolectricTest` | ✅ PASSED | Ověření čtení stringových zdrojů v kontextu aplikace. |
 | `WavHelperTest` (7 testů) | ✅ PASSED | Streamované čtení hlavičky, downmix kanálů do mono, přeskočení neznámých chunků, odmítnutí příliš dlouhé nahrávky a 16-bit round trip. |
-| `gradle :app:testDebugUnitTest` | ✅ SUCCESS | 16/16 testů zelených (lokálně, Gradle 9.3.1). |
+| `AudioExporterTest` (4 testy) | ✅ PASSED | Cílové názvy exportu (`name.wav`, `name_1.wav`, …) a název cílové složky `Music/AudioDetective`. |
+| `gradle :app:testDebugUnitTest` | ✅ SUCCESS | 20/20 testů zelených (lokálně, Gradle 9.3.1). |
 | `gradle :app:assembleDebug` | ✅ SUCCESS | Build APK bez chyb; ověřeno i spuštění na emulátoru (Android 37.1). |
+| Export do `Music/AudioDetective` na zařízení | ✅ VERIFIED | Export z Dashboardu vytvořil `/sdcard/Music/AudioDetective/*.wav` s totožným MD5 jako interní kopie; MediaStore eviduje `relative_path=Music/AudioDetective/`. |
 
 ---
 

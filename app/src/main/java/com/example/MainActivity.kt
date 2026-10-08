@@ -1,9 +1,14 @@
 package com.example
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,12 +30,16 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.model.AppTab
 import com.example.ui.components.LiveRecordingDialog
@@ -65,6 +74,27 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun MainAppScreen(viewModel: AudioDetectiveViewModel) {
+    // Android 9 and below need WRITE_EXTERNAL_STORAGE to publish exports into Music/AudioDetective.
+    // Android 10+ writes through MediaStore and asks for nothing, so the request is skipped there.
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+        val context = LocalContext.current
+        var requested by remember { mutableStateOf(false) }
+        val permissionLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission()
+        ) { }
+
+        LaunchedEffect(Unit) {
+            if (!requested && ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                requested = true
+                permissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }
+        }
+    }
+
     val activeTab by viewModel.activeTab.collectAsStateWithLifecycle()
     val audioFiles by viewModel.audioFiles.collectAsStateWithLifecycle()
     val selectedAudio by viewModel.selectedAudio.collectAsStateWithLifecycle()

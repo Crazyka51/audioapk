@@ -37,6 +37,19 @@ sestaví debug APK na každý push do `main` a lze ho spustit i ručně:
 APK je podepsané debug klíčem, takže je vhodné pro testování, ne pro
 distribuci do Google Play.
 
+## Kam se ukládají exporty
+
+Každá nově vytvořená (vyčištěná) stopa se kromě interní knihovny aplikace publikuje do
+veřejné složky **`Music/AudioDetective`**, takže je vidět ve správci souborů i v hudebním
+přehrávači. Potvrzení v aplikaci vypíše přesnou cestu.
+
+- **Android 10+**: zápis přes MediaStore, bez oprávnění.
+- **Android 9 a nižší**: přímý zápis + indexace mediálním skenerem, vyžaduje
+  `WRITE_EXTERNAL_STORAGE` (deklarováno s `maxSdkVersion="28"`, aplikace si ho vyžádá při startu).
+
+Původní nahrávka se nikdy nepřepisuje a export nikdy nepřepíše dřívější export stejného jména
+(nový soubor dostane příponu `_1`, `_2`, …).
+
 ### Stabilní podpis APK (aby šly aktualizace přes sebe)
 
 Android povolí instalaci nové verze přes předchozí jen tehdy, když je podepsaná **stejným
