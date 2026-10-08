@@ -51,7 +51,8 @@ app/src/main/java/com/example/
 │   └── ForensicAudioPlayer.kt    # AudioTrack streaming engine + živý DSP náhled celého
 │                                 #   racku, přesný transport, A-B smyčka, pitch-locked speed
 ├── data/
-│   └── AudioDetectiveRepository.kt # Práce se soubory v lokálním úložišti, metadata, správa stop
+│   ├── AudioDetectiveRepository.kt # Práce se soubory v lokálním úložišti, metadata, správa stop
+│   └── AudioExporter.kt          # Export vyčištěných stop do veřejné složky Music/AudioDetective
 ├── dsp/
 │   ├── AdaptiveLmsFilter.kt      # Adaptivní Leaky NLMS filtr pro proměnlivý hluk (auta, vítr)
 │   ├── AudioDecoder.kt           # Univerzální dekodér audio formátů do FloatArray PCM
