@@ -162,56 +162,95 @@ class FftProcessor(val fftSize: Int = 1024) {
     }
 
     companion object {
+enum class HeatmapPalette(val label: String) {
+    CYBER_NEON("Cyber Neon"),
+    THERMAL_IR("Thermal IR"),
+    VIRIDIS("Viridis"),
+    XRAY_MONO("X-Ray Mono")
+}
+
         /**
-         * Maps a normalized intensity (0.0 to 1.0) to a rich forensic heat-map color:
-         * 0.0: Deep Space Navy / Dark Blue (#07080B -> #002244)
-         * 0.3: Electric Forensic Cyan (#00E5FF)
-         * 0.6: Neon Green (#00FF9D)
-         * 0.8: Forensic Amber / Yellow (#FFD600)
-         * 1.0: Hot White / Infrared Red (#FF1744 -> #FFFFFF)
+         * Maps a normalized intensity (0.0 to 1.0) to a forensic heat-map color according to the chosen palette.
          */
-        fun intensityToHeatmapColor(intensity: Float): Color {
+        fun intensityToHeatmapColor(
+            intensity: Float,
+            palette: HeatmapPalette = HeatmapPalette.CYBER_NEON
+        ): Color {
             val t = intensity.coerceIn(0f, 1f)
-            return when {
-                t < 0.25f -> {
-                    // Dark background to Cyan
-                    val factor = t / 0.25f
-                    Color(
-                        red = 0.03f + factor * 0f,
-                        green = 0.05f + factor * 0.90f,
-                        blue = 0.12f + factor * 0.88f,
-                        alpha = 1.0f
-                    )
+            return when (palette) {
+                HeatmapPalette.CYBER_NEON -> when {
+                    t < 0.25f -> {
+                        val factor = t / 0.25f
+                        Color(
+                            red = 0.03f,
+                            green = 0.05f + factor * 0.90f,
+                            blue = 0.12f + factor * 0.88f,
+                            alpha = 1.0f
+                        )
+                    }
+                    t < 0.5f -> {
+                        val factor = (t - 0.25f) / 0.25f
+                        Color(
+                            red = 0f,
+                            green = 0.90f + factor * 0.10f,
+                            blue = 1.0f - factor * 0.40f,
+                            alpha = 1.0f
+                        )
+                    }
+                    t < 0.75f -> {
+                        val factor = (t - 0.5f) / 0.25f
+                        Color(
+                            red = factor * 1.0f,
+                            green = 1.0f - factor * 0.15f,
+                            blue = 0.60f * (1f - factor),
+                            alpha = 1.0f
+                        )
+                    }
+                    else -> {
+                        val factor = (t - 0.75f) / 0.25f
+                        Color(
+                            red = 1.0f,
+                            green = 0.85f * (1f - factor) + factor * 0.95f,
+                            blue = factor * 0.95f,
+                            alpha = 1.0f
+                        )
+                    }
                 }
-                t < 0.5f -> {
-                    // Cyan to Neon Green
-                    val factor = (t - 0.25f) / 0.25f
-                    Color(
-                        red = 0f + factor * 0f,
-                        green = 0.90f + factor * 0.10f,
-                        blue = 1.0f - factor * 0.40f,
-                        alpha = 1.0f
-                    )
+                HeatmapPalette.THERMAL_IR -> when {
+                    t < 0.3f -> {
+                        val f = t / 0.3f
+                        Color(red = 0.04f + f * 0.45f, green = 0.02f, blue = 0.08f + f * 0.50f, alpha = 1f)
+                    }
+                    t < 0.6f -> {
+                        val f = (t - 0.3f) / 0.3f
+                        Color(red = 0.49f + f * 0.51f, green = 0.02f + f * 0.35f, blue = 0.58f * (1f - f), alpha = 1f)
+                    }
+                    t < 0.85f -> {
+                        val f = (t - 0.6f) / 0.25f
+                        Color(red = 1.0f, green = 0.37f + f * 0.55f, blue = f * 0.15f, alpha = 1f)
+                    }
+                    else -> {
+                        val f = (t - 0.85f) / 0.15f
+                        Color(red = 1.0f, green = 0.92f + f * 0.08f, blue = 0.15f + f * 0.85f, alpha = 1f)
+                    }
                 }
-                t < 0.75f -> {
-                    // Neon Green to Yellow/Amber
-                    val factor = (t - 0.5f) / 0.25f
-                    Color(
-                        red = factor * 1.0f,
-                        green = 1.0f - factor * 0.15f,
-                        blue = 0.60f * (1f - factor),
-                        alpha = 1.0f
-                    )
+                HeatmapPalette.VIRIDIS -> when {
+                    t < 0.33f -> {
+                        val f = t / 0.33f
+                        Color(red = 0.15f * (1f - f) + 0.12f * f, green = 0.05f + f * 0.45f, blue = 0.28f + f * 0.27f, alpha = 1f)
+                    }
+                    t < 0.66f -> {
+                        val f = (t - 0.33f) / 0.33f
+                        Color(red = 0.12f + f * 0.25f, green = 0.50f + f * 0.30f, blue = 0.55f - f * 0.18f, alpha = 1f)
+                    }
+                    else -> {
+                        val f = (t - 0.66f) / 0.34f
+                        Color(red = 0.37f + f * 0.62f, green = 0.80f + f * 0.18f, blue = 0.37f * (1f - f) + 0.15f, alpha = 1f)
+                    }
                 }
-                else -> {
-                    // Amber to Intense Red / Hot White
-                    val factor = (t - 0.75f) / 0.25f
-                    Color(
-                        red = 1.0f,
-                        green = 0.85f * (1f - factor) + factor * 0.95f,
-                        blue = factor * 0.95f,
-                        alpha = 1.0f
-                    )
+                HeatmapPalette.XRAY_MONO -> {
+                    val v = (t * t * 0.3f + t * 0.7f).coerceIn(0.04f, 1.0f)
+                    Color(red = v * 0.9f, green = v * 0.97f, blue = v, alpha = 1f)
                 }
             }
         }
@@ -233,5 +272,11 @@ data class SpectrogramResult(
 
     fun frequencyToBin(freq: Float): Int {
         return ((freq / nyquistFreq) * numBins).toInt().coerceIn(0, numBins - 1)
+    }
+
+    fun getColumnAtFraction(fraction: Float): FloatArray? {
+        if (columns.isEmpty()) return null
+        val idx = (fraction.coerceIn(0f, 1f) * (columns.size - 1)).toInt().coerceIn(0, columns.size - 1)
+        return columns[idx]
     }
 }

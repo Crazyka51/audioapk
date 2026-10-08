@@ -63,7 +63,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.model.AudioFileItem
 import com.example.model.DspConfig
 import com.example.ui.components.AbLoopController
+import com.example.ui.components.ReferenceSubtractionCard
 import com.example.ui.components.SpectrogramCanvas
+import com.example.ui.components.VoiceSeparationCard
 import com.example.ui.components.WaveformView
 import com.example.ui.theme.ForensicCyan
 import com.example.ui.theme.ForensicDarkBackground
@@ -212,14 +214,14 @@ fun StudioScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "2. Frequency Spectrogram (0 - 20 kHz FFT Heatmap)",
+                                text = "2. FFT Spektrální analýza (Tepelná mapa frekvencí)",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = ForensicNeonGreen,
                                 fontWeight = FontWeight.Bold
                             )
                             if (inspectionPoint != null) {
                                 Text(
-                                    text = "Inspect: ${inspectionPoint.frequencyHz.toInt()} Hz",
+                                    text = "Sonda: ${inspectionPoint.frequencyHz.toInt()} Hz",
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 11.sp,
                                     color = ForensicOrange,
@@ -230,25 +232,17 @@ fun StudioScreen(
 
                         Spacer(modifier = Modifier.height(6.dp))
 
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(160.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .border(1.dp, Color(0xFF1E2432), RoundedCornerShape(8.dp))
-                        ) {
-                            val specResult by viewModel.spectrogram.collectAsStateWithLifecycle()
-                            SpectrogramCanvas(
-                                spectrogram = specResult,
-                                currentPositionMs = currentPositionMs,
-                                durationMs = durationMs,
-                                inspectionPoint = inspectionPoint,
-                                onInspectPoint = { freq, db, time ->
-                                    viewModel.inspectPoint(freq, db, time)
-                                },
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
+                        val specResult by viewModel.spectrogram.collectAsStateWithLifecycle()
+                        SpectrogramCanvas(
+                            spectrogram = specResult,
+                            currentPositionMs = currentPositionMs,
+                            durationMs = durationMs,
+                            inspectionPoint = inspectionPoint,
+                            onInspectPoint = { freq, db, time ->
+                                viewModel.inspectPoint(freq, db, time)
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
 
                         // Inspection legend
                         Row(
@@ -258,13 +252,13 @@ fun StudioScreen(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = "Tap spectrogram to inspect exact Hz & dBFS",
+                                text = "Klepněte nebo táhněte po spektrogramu pro odečet Hz, dBFS a formantů",
                                 fontSize = 10.sp,
                                 color = ForensicTextMuted
                             )
                             if (inspectionPoint != null) {
                                 Text(
-                                    text = "Clear Pin",
+                                    text = "Zrušit sondu",
                                     fontSize = 10.sp,
                                     color = ForensicOrange,
                                     modifier = Modifier.clickable { viewModel.clearInspectionPoint() }
@@ -398,6 +392,46 @@ fun StudioScreen(
                     onSetB = { viewModel.setLoopEndToCurrent() },
                     onNudgeA = { viewModel.nudgeLoopStart(it) },
                     onNudgeB = { viewModel.nudgeLoopEnd(it) }
+                )
+
+                // 2-Step Spectral Sample & Known Song Subtraction Card
+                val audioFiles by viewModel.audioFiles.collectAsStateWithLifecycle()
+                val learnedProfile by viewModel.learnedProfile.collectAsStateWithLifecycle()
+                val refAttenuation by viewModel.referenceAttenuation.collectAsStateWithLifecycle()
+                val refMatchGain by viewModel.referenceMatchGain.collectAsStateWithLifecycle()
+                val refOffsetMs by viewModel.referenceOffsetMs.collectAsStateWithLifecycle()
+                val protectFormants by viewModel.protectVoiceFormants.collectAsStateWithLifecycle()
+
+                ReferenceSubtractionCard(
+                    dspConfig = dspConfig,
+                    audioFiles = audioFiles,
+                    selectedAudio = selectedAudio,
+                    learnedProfile = learnedProfile,
+                    attenuationStrength = refAttenuation,
+                    spectralMatchGain = refMatchGain,
+                    timeOffsetMs = refOffsetMs,
+                    protectVoiceFormants = protectFormants,
+                    onLearnFromAbInterval = { viewModel.learnProfileFromAbLoop() },
+                    onLearnFromLibraryTrack = { viewModel.learnProfileFromLibraryTrack(it) },
+                    onLearnFromExternalUri = { viewModel.learnProfileFromExternalUri(it) },
+                    onClearProfile = { viewModel.clearLearnedProfile() },
+                    onAttenuationChange = { viewModel.setReferenceAttenuation(it) },
+                    onMatchGainChange = { viewModel.setReferenceMatchGain(it) },
+                    onOffsetChange = { viewModel.setReferenceOffsetMs(it) },
+                    onProtectFormantsChange = { viewModel.setProtectVoiceFormants(it) },
+                    onApplySubtractionToWholeTrack = { viewModel.applyLearnedProfileToWholeTrack() }
+                )
+
+                // STFT Voice Separation & Formant Isolation Card
+                val voiceStats by viewModel.voiceSeparationStats.collectAsStateWithLifecycle()
+                VoiceSeparationCard(
+                    dspConfig = dspConfig,
+                    stats = voiceStats,
+                    onToggleEnabled = { viewModel.toggleVoiceSeparation(it) },
+                    onSelectMode = { viewModel.setVoiceSeparationMode(it) },
+                    onStrengthChange = { viewModel.setVoiceSeparationStrength(it) },
+                    onFormantBoostChange = { viewModel.setVocalFormantBoost(it) },
+                    onSeparateAndSave = { viewModel.separateVoiceAndSave() }
                 )
 
                 // Quick Forensic Filter Toggles

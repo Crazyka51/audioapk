@@ -1,8 +1,11 @@
 package com.example.model
 
+import com.example.dsp.VoiceSeparationMode
+
 enum class AudioStatus(val displayName: String) {
     ORIGINAL("Original"),
     CLEANED("Cleaned"),
+    VOICE_SEPARATED("Voice Isolated"),
     HPF_ACTIVE("HPF Active"),
     WHISPER_BOOSTED("Boosted"),
     PROCESSED("Processed")
@@ -58,6 +61,11 @@ data class DspConfig(
     
     val noiseReductionEnabled: Boolean = false,
     val noiseReductionLevel: Float = 0.75f, // 0.0 to 1.0
+
+    val voiceSeparationEnabled: Boolean = false,
+    val voiceSeparationMode: VoiceSeparationMode = VoiceSeparationMode.ISOLATE_VOICE,
+    val voiceSeparationStrength: Float = 0.85f, // 0.1 to 1.0
+    val vocalFormantBoostDb: Float = 8.0f, // 0 to +18 dB
     
     val playbackSpeed: Float = 1.0f, // 0.5x to 1.5x
     val pitchCorrectionEnabled: Boolean = true,

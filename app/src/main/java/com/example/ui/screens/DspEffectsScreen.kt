@@ -35,6 +35,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,7 +45,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.model.DspConfig
+import com.example.ui.components.ReferenceSubtractionCard
+import com.example.ui.components.VoiceSeparationCard
 import com.example.ui.theme.ForensicCyan
 import com.example.ui.theme.ForensicDarkBackground
 import com.example.ui.theme.ForensicNeonGreen
@@ -62,6 +66,14 @@ fun DspEffectsScreen(
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
+    val voiceStats by viewModel.voiceSeparationStats.collectAsStateWithLifecycle()
+    val audioFiles by viewModel.audioFiles.collectAsStateWithLifecycle()
+    val selectedAudio by viewModel.selectedAudio.collectAsStateWithLifecycle()
+    val learnedProfile by viewModel.learnedProfile.collectAsStateWithLifecycle()
+    val refAttenuation by viewModel.referenceAttenuation.collectAsStateWithLifecycle()
+    val refMatchGain by viewModel.referenceMatchGain.collectAsStateWithLifecycle()
+    val refOffsetMs by viewModel.referenceOffsetMs.collectAsStateWithLifecycle()
+    val protectFormants by viewModel.protectVoiceFormants.collectAsStateWithLifecycle()
 
     Box(
         modifier = modifier
@@ -86,18 +98,50 @@ fun DspEffectsScreen(
                 Spacer(modifier = Modifier.width(10.dp))
                 Column {
                     Text(
-                        text = "Forensic DSP Filter Rack",
+                        text = "Forensic DSP & Separace Hlasu",
                         style = MaterialTheme.typography.titleLarge,
                         color = ForensicTextPrimary,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Non-destructive offline signal processing engine",
+                        text = "STFT separace řeči, izolace formantů a potlačení šumu",
                         style = MaterialTheme.typography.bodySmall,
                         color = ForensicTextSecondary
                     )
                 }
             }
+
+            // 0. STFT Voice Separation & Formant Isolation Card
+            VoiceSeparationCard(
+                dspConfig = dspConfig,
+                stats = voiceStats,
+                onToggleEnabled = { viewModel.toggleVoiceSeparation(it) },
+                onSelectMode = { viewModel.setVoiceSeparationMode(it) },
+                onStrengthChange = { viewModel.setVoiceSeparationStrength(it) },
+                onFormantBoostChange = { viewModel.setVocalFormantBoost(it) },
+                onSeparateAndSave = { viewModel.separateVoiceAndSave() }
+            )
+
+            // 0B. 2-Step Reference Song & Sample Profile Subtraction Card
+            ReferenceSubtractionCard(
+                dspConfig = dspConfig,
+                audioFiles = audioFiles,
+                selectedAudio = selectedAudio,
+                learnedProfile = learnedProfile,
+                attenuationStrength = refAttenuation,
+                spectralMatchGain = refMatchGain,
+                timeOffsetMs = refOffsetMs,
+                protectVoiceFormants = protectFormants,
+                onLearnFromAbInterval = { viewModel.learnProfileFromAbLoop() },
+                onLearnFromLibraryTrack = { viewModel.learnProfileFromLibraryTrack(it) },
+                onLearnFromExternalUri = { viewModel.learnProfileFromExternalUri(it) },
+                onClearProfile = { viewModel.clearLearnedProfile() },
+                onAttenuationChange = { viewModel.setReferenceAttenuation(it) },
+                onMatchGainChange = { viewModel.setReferenceMatchGain(it) },
+                onOffsetChange = { viewModel.setReferenceOffsetMs(it) },
+                onProtectFormantsChange = { viewModel.setProtectVoiceFormants(it) },
+                onApplySubtractionToWholeTrack = { viewModel.applyLearnedProfileToWholeTrack() }
+            )
 
             // 1. High-Pass Filter (Voice Isolation / Low Rumble cut)
             FilterCard(

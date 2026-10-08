@@ -327,6 +327,7 @@ fun AudioCardItem(
 fun StatusBadge(status: AudioStatus) {
     val (bg, text, textColor) = when (status) {
         AudioStatus.CLEANED -> Triple(Color(0xFF0A333E), "Cleaned", ForensicCyan)
+        AudioStatus.VOICE_SEPARATED -> Triple(Color(0xFF0B3829), "Voice Separated", ForensicNeonGreen)
         AudioStatus.WHISPER_BOOSTED -> Triple(Color(0xFF0D3B20), "Boosted", ForensicNeonGreen)
         AudioStatus.HPF_ACTIVE -> Triple(Color(0xFF38230D), "HPF 300Hz", ForensicOrange)
         AudioStatus.PROCESSED -> Triple(Color(0xFF261D38), "Filtered", Color(0xFFC792EA))

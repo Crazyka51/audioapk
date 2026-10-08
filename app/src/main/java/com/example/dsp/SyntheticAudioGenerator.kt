@@ -127,4 +127,65 @@ object SyntheticAudioGenerator {
 
         WavHelper.writeWav(file, samples, sampleRate, 1)
     }
+
+    /**
+     * Synthesizes a deterministic background radio song signal at time t (seconds).
+     */
+    private fun sampleBackgroundSongAt(t: Float): Float {
+        // 4-bar chord progression changing every 2.0 seconds
+        val bar = ((t / 2.0f).toInt()) % 4
+        val rootHz = when (bar) {
+            0 -> 110.0f // A2
+            1 -> 87.31f // F2
+            2 -> 130.81f // C3
+            else -> 98.0f // G2
+        }
+        val beatEnv = (0.55f + 0.45f * sin(2.0 * PI * 2.0 * t).toFloat())
+        val bass = 0.26f * sin(2.0 * PI * rootHz * t).toFloat()
+        val fifth = 0.18f * sin(2.0 * PI * (rootHz * 1.5f) * t).toFloat()
+        val octave = 0.14f * sin(2.0 * PI * (rootHz * 2.0f) * t).toFloat()
+        val melody = 0.15f * sin(2.0 * PI * (rootHz * 4.0f) * t).toFloat() * beatEnv
+        return (bass + fifth + octave + melody) * 0.75f
+    }
+
+    /**
+     * Generates the clean reference audio file of the known song ("Known_Radio_Song_Reference.wav").
+     */
+    fun generateKnownSongReference(file: File, sampleRate: Int = 44100, durationSec: Float = 12.0f) {
+        val totalSamples = (sampleRate * durationSec).toInt()
+        val samples = FloatArray(totalSamples)
+        for (i in 0 until totalSamples) {
+            val t = i.toFloat() / sampleRate
+            samples[i] = sampleBackgroundSongAt(t).coerceIn(-1.0f, 1.0f)
+        }
+        WavHelper.writeWav(file, samples, sampleRate, 1)
+    }
+
+    /**
+     * Generates a forensic wiretap recording where the known song plays loudly in the room,
+     * masking covert human speech underneath ("Cafe_Wiretap_With_Song.wav").
+     */
+    fun generateCafeWiretapWithSong(file: File, sampleRate: Int = 44100, durationSec: Float = 12.0f) {
+        val totalSamples = (sampleRate * durationSec).toInt()
+        val samples = FloatArray(totalSamples)
+        val random = Random(9001)
+
+        for (i in 0 until totalSamples) {
+            val t = i.toFloat() / sampleRate
+            val songInRoom = sampleBackgroundSongAt(t) * 0.68f
+            val roomAmbience = (random.nextFloat() * 2f - 1f) * 0.02f
+
+            var covertSpeech = 0f
+            if ((t in 2.2..5.8) || (t in 7.2..10.8)) {
+                val sylEnv = (0.5f + 0.5f * sin(2.0 * PI * 3.6 * t).toFloat())
+                val f1 = sin(2.0 * PI * 680.0 * t).toFloat() * 0.40f
+                val f2 = sin(2.0 * PI * 1620.0 * t).toFloat() * 0.38f
+                val f3 = sin(2.0 * PI * 2720.0 * t).toFloat() * 0.25f
+                covertSpeech = (f1 + f2 + f3) * sylEnv * 0.14f
+            }
+
+            samples[i] = (songInRoom + roomAmbience + covertSpeech).coerceIn(-1.0f, 1.0f)
+        }
+        WavHelper.writeWav(file, samples, sampleRate, 1)
+    }
 }

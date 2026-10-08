@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,6 +28,7 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FloatingActionButton
@@ -76,6 +80,14 @@ fun DashboardScreen(
 ) {
     var searchVisible by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            viewModel.importAudioFile(uri, null)
+        }
+    }
 
     val filteredFiles = remember(audioFiles, searchQuery) {
         if (searchQuery.isBlank()) audioFiles
@@ -239,17 +251,45 @@ fun DashboardScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Audio Recordings",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = ForensicTextPrimary,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = "${filteredFiles.size} items",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ForensicTextMuted
-                    )
+                    Column {
+                        Text(
+                            text = "Audio Recordings",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = ForensicTextPrimary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "${filteredFiles.size} items • WAV, MP3, M4A, AAC",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ForensicTextMuted,
+                            fontSize = 11.sp
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFF14303A))
+                            .border(1.dp, ForensicCyan.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                            .clickable { importLauncher.launch("audio/*") }
+                            .padding(horizontal = 12.dp, vertical = 7.dp)
+                            .testTag("dashboard_import_audio_btn"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.UploadFile,
+                            contentDescription = "Import Audio",
+                            tint = ForensicCyan,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Import File",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ForensicCyan
+                        )
+                    }
                 }
             }
 

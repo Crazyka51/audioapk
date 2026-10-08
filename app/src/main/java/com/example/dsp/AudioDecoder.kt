@@ -15,7 +15,7 @@ object AudioDecoder {
      * Decodes an audio file (URI or local File) into a normalized FloatArray PCM [-1.0..1.0].
      */
     fun decodeToPcm(context: Context, uri: Uri): WavAudioData? {
-        // If it's a standard WAV file, read directly for speed
+        // 1. Check local file WAV first
         if (uri.path?.endsWith(".wav", ignoreCase = true) == true) {
             val localFile = File(uri.path ?: "")
             if (localFile.exists()) {
@@ -23,6 +23,25 @@ object AudioDecoder {
                 if (wav != null) return wav
             }
         }
+
+        // 2. Check if content:// stream is a RIFF WAVE file
+        try {
+            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                val header = ByteArray(12)
+                val read = inputStream.read(header)
+                if (read == 12 &&
+                    String(header, 0, 4) == "RIFF" &&
+                    String(header, 8, 4) == "WAVE"
+                ) {
+                    val rest = inputStream.readBytes()
+                    val fullBytes = ByteArray(12 + rest.size)
+                    System.arraycopy(header, 0, fullBytes, 0, 12)
+                    System.arraycopy(rest, 0, fullBytes, 12, rest.size)
+                    val wav = WavHelper.readWavBytes(fullBytes)
+                    if (wav != null) return wav
+                }
+            }
+        } catch (ignored: Exception) {}
 
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null

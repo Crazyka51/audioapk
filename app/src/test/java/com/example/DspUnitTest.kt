@@ -3,8 +3,12 @@ package com.example
 import com.example.dsp.BiquadFilter
 import com.example.dsp.FftProcessor
 import com.example.dsp.FilterType
+import com.example.dsp.ReferenceAudioCanceller
+import com.example.dsp.VoiceSeparationMode
+import com.example.dsp.VoiceSeparator
 import com.example.dsp.WhisperCompressor
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.PI
@@ -74,5 +78,97 @@ class DspUnitTest {
         val boosted = compressor.process(faintSamples)
 
         assertTrue("Quiet whisper signal should be boosted (input: 0.01, output: ${boosted.last()})", boosted.last() > 0.025f)
+    }
+
+    @Test
+    fun testVoiceSeparator_isolatesVocalFormants() {
+        val sampleRate = 44100
+        val separator = VoiceSeparator(fftSize = 1024, hopSize = 256, sampleRate = sampleRate)
+
+        // Generate 4096 samples with 50 Hz low hum + 1600 Hz vocal formant F2
+        val mixed = FloatArray(4096) { i ->
+            val t = i.toFloat() / sampleRate
+            val hum50Hz = 0.45f * sin(2.0 * PI * 50.0 * t).toFloat()
+            val formant1600Hz = 0.25f * sin(2.0 * PI * 1600.0 * t).toFloat()
+            hum50Hz + formant1600Hz
+        }
+
+        val statsBefore = separator.analyzeVoiceMetrics(mixed)
+        val separated = separator.separate(
+            samples = mixed,
+            mode = VoiceSeparationMode.ISOLATE_VOICE,
+            separationStrength = 0.90f,
+            formantBoostDb = 10.0f
+        )
+        val statsAfter = separator.analyzeVoiceMetrics(separated)
+
+        assertTrue(
+            "Vocal energy ratio should increase after STFT voice separation (before: ${statsBefore.vocalEnergyRatio}, after: ${statsAfter.vocalEnergyRatio})",
+            statsAfter.vocalEnergyRatio > statsBefore.vocalEnergyRatio
+        )
+    }
+
+    @Test
+    fun testReferenceAudioCanceller_subtractsKnownSongAndPreservesSpeech() {
+        val sampleRate = 44100
+        val fftSize = 1024
+        val canceller = ReferenceAudioCanceller(fftSize = fftSize, hopSize = 256, sampleRate = sampleRate)
+        val fft = FftProcessor(fftSize)
+
+        // Known background song: 110 Hz bass + 220 Hz harmony
+        val referenceSong = FloatArray(8192) { i ->
+            val t = i.toFloat() / sampleRate
+            0.45f * sin(2.0 * PI * 110.0 * t).toFloat() + 0.30f * sin(2.0 * PI * 220.0 * t).toFloat()
+        }
+
+        // Mixed recording: known song + covert human voice formant at 1650 Hz
+        val mixedRecording = FloatArray(8192) { i ->
+            val t = i.toFloat() / sampleRate
+            val song = referenceSong[i] * 0.8f
+            val voice = 0.22f * sin(2.0 * PI * 1650.0 * t).toFloat()
+            song + voice
+        }
+
+        val profile = canceller.learnFromReferenceTrack(
+            referenceSamples = referenceSong,
+            referenceSampleRate = sampleRate,
+            referenceTitle = "Known_Song",
+            targetSamples = mixedRecording
+        )
+        assertNotNull("Learned spectral profile should not be null", profile)
+
+        val cleaned = canceller.applyProfileSubtraction(
+            targetSamples = mixedRecording,
+            profile = profile!!,
+            attenuationStrength = 0.90f,
+            spectralMatchGain = 1.0f,
+            timeOffsetMs = 0L,
+            protectVoiceFormants = true
+        )
+
+        // Measure spectrum before and after at 2048 sample offset (steady state)
+        val beforeDb = fft.computeMagnitudesDb(mixedRecording, offset = 2048)
+        val afterDb = fft.computeMagnitudesDb(cleaned, offset = 2048)
+
+        val nyquist = sampleRate / 2.0f
+        val numBins = fftSize / 2
+        val bin110 = ((110f / nyquist) * numBins).toInt().coerceIn(0, numBins - 1)
+        val bin1650 = ((1650f / nyquist) * numBins).toInt().coerceIn(0, numBins - 1)
+
+        val songDbBefore = beforeDb[bin110]
+        val songDbAfter = afterDb[bin110]
+        val voiceDbAfter = afterDb[bin1650]
+
+        // 1. The 110 Hz song component should be noticeably attenuated
+        assertTrue(
+            "Known song frequency (110 Hz) should be attenuated (before: $songDbBefore dB, after: $songDbAfter dB)",
+            songDbAfter < songDbBefore - 3.0f
+        )
+
+        // 2. The 1650 Hz voice formant should be preserved at an audible level (> -50 dBFS)
+        assertTrue(
+            "Voice formant (1650 Hz) should remain preserved and audible (got: $voiceDbAfter dB)",
+            voiceDbAfter > -50.0f
+        )
     }
 }

@@ -10,7 +10,11 @@ import com.example.audio.PlaybackState
 import com.example.audio.RecordingStatus
 import com.example.data.AudioDetectiveRepository
 import com.example.dsp.FftProcessor
+import com.example.dsp.LearnedSpectralProfile
 import com.example.dsp.SpectrogramResult
+import com.example.dsp.VoiceSeparationMode
+import com.example.dsp.VoiceSeparationStats
+import com.example.dsp.VoiceSeparator
 import com.example.model.AppTab
 import com.example.model.AudioFileItem
 import com.example.model.DspConfig
@@ -51,6 +55,24 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
 
     private val _spectrogram = MutableStateFlow<SpectrogramResult?>(null)
     val spectrogram: StateFlow<SpectrogramResult?> = _spectrogram.asStateFlow()
+
+    private val _voiceSeparationStats = MutableStateFlow<VoiceSeparationStats?>(null)
+    val voiceSeparationStats: StateFlow<VoiceSeparationStats?> = _voiceSeparationStats.asStateFlow()
+
+    private val _learnedProfile = MutableStateFlow<LearnedSpectralProfile?>(null)
+    val learnedProfile: StateFlow<LearnedSpectralProfile?> = _learnedProfile.asStateFlow()
+
+    private val _referenceAttenuation = MutableStateFlow(0.88f)
+    val referenceAttenuation: StateFlow<Float> = _referenceAttenuation.asStateFlow()
+
+    private val _referenceMatchGain = MutableStateFlow(1.20f)
+    val referenceMatchGain: StateFlow<Float> = _referenceMatchGain.asStateFlow()
+
+    private val _referenceOffsetMs = MutableStateFlow(0L)
+    val referenceOffsetMs: StateFlow<Long> = _referenceOffsetMs.asStateFlow()
+
+    private val _protectVoiceFormants = MutableStateFlow(true)
+    val protectVoiceFormants: StateFlow<Boolean> = _protectVoiceFormants.asStateFlow()
 
     private val _dspConfig = MutableStateFlow(DspConfig())
     val dspConfig: StateFlow<DspConfig> = _dspConfig.asStateFlow()
@@ -114,6 +136,9 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
                 )
                 _spectrogram.value = spec
 
+                val separator = VoiceSeparator(fftSize = 1024, hopSize = 256, sampleRate = pcmData.sampleRate)
+                _voiceSeparationStats.value = separator.analyzeVoiceMetrics(pcmData.samples)
+
                 // Configure default loop markers to 25% - 75% or first 3 seconds
                 val durMs = item.durationMs
                 val defaultStart = (durMs * 0.15).toLong()
@@ -126,6 +151,7 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
             } else {
                 _pcmSamples.value = null
                 _spectrogram.value = null
+                _voiceSeparationStats.value = null
             }
 
             player.loadAudio(file, _dspConfig.value)
@@ -212,6 +238,165 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
         val updated = _dspConfig.value.copy(noiseReductionLevel = level)
         _dspConfig.value = updated
         player.updateDspConfig(updated)
+    }
+
+    fun toggleVoiceSeparation(enabled: Boolean) {
+        val updated = _dspConfig.value.copy(voiceSeparationEnabled = enabled)
+        _dspConfig.value = updated
+        player.updateDspConfig(updated)
+    }
+
+    fun setVoiceSeparationMode(mode: VoiceSeparationMode) {
+        val updated = _dspConfig.value.copy(
+            voiceSeparationEnabled = true,
+            voiceSeparationMode = mode
+        )
+        _dspConfig.value = updated
+        player.updateDspConfig(updated)
+    }
+
+    fun setVoiceSeparationStrength(strength: Float) {
+        val updated = _dspConfig.value.copy(voiceSeparationStrength = strength)
+        _dspConfig.value = updated
+        player.updateDspConfig(updated)
+    }
+
+    fun setVocalFormantBoost(boostDb: Float) {
+        val updated = _dspConfig.value.copy(vocalFormantBoostDb = boostDb)
+        _dspConfig.value = updated
+        player.updateDspConfig(updated)
+    }
+
+    fun separateVoiceAndSave() {
+        val selected = _selectedAudio.value ?: return
+        val activeConfig = _dspConfig.value.copy(voiceSeparationEnabled = true)
+        _dspConfig.value = activeConfig
+        viewModelScope.launch {
+            _isLoading.value = true
+            val sourceFile = File(selected.filePath)
+            val suffix = when (activeConfig.voiceSeparationMode) {
+                VoiceSeparationMode.ISOLATE_WHISPER -> "WhisperSep"
+                VoiceSeparationMode.BACKGROUND_RESIDUAL -> "BgResidual"
+                else -> "VoiceSep"
+            }
+            val newTrack = repository.processAndSaveFilteredWav(sourceFile, activeConfig, suffix)
+            _isLoading.value = false
+            if (newTrack != null) {
+                _userMessage.value = "Hlas separován: ${newTrack.fileName}"
+                loadAudioFiles(autoSelectFirst = false)
+                selectAudioFile(newTrack)
+            } else {
+                _userMessage.value = "Chyba při separaci hlasu"
+            }
+        }
+    }
+
+    // --- 2-Step Spectral Sample & Reference Song Subtraction ---
+
+    fun learnProfileFromAbLoop() {
+        val selected = _selectedAudio.value ?: return
+        val cfg = _dspConfig.value
+        val startMs = cfg.loopStartMs
+        val endMs = if (cfg.loopEndMs > startMs + 300L) cfg.loopEndMs else (startMs + 2500L).coerceAtMost(selected.durationMs)
+
+        viewModelScope.launch {
+            _isLoading.value = true
+            val profile = repository.learnProfileFromInterval(
+                sourceFile = File(selected.filePath),
+                startMs = startMs,
+                endMs = endMs,
+                trackTitle = selected.title
+            )
+            _isLoading.value = false
+            if (profile != null) {
+                _learnedProfile.value = profile
+                _referenceOffsetMs.value = 0L
+                _userMessage.value = "Vzorek získán z úseku A–B (${String.format("%.1f", (endMs - startMs) / 1000f)} s) • Dom. ${profile.dominantFreqHz.toInt()} Hz"
+            } else {
+                _userMessage.value = "Nepodařilo se získat vzorek (úsek je příliš krátký)"
+            }
+        }
+    }
+
+    fun learnProfileFromLibraryTrack(referenceItem: AudioFileItem) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            val profile = repository.learnProfileFromReferenceFile(
+                referenceFile = File(referenceItem.filePath),
+                targetSamples = _pcmSamples.value
+            )
+            _isLoading.value = false
+            if (profile != null) {
+                _learnedProfile.value = profile
+                _referenceOffsetMs.value = profile.detectedOffsetMs
+                _userMessage.value = "Načten referenční vzor: ${referenceItem.title} (synchronizace: ${profile.detectedOffsetMs} ms)"
+            } else {
+                _userMessage.value = "Chyba při analýze referenční skladby"
+            }
+        }
+    }
+
+    fun learnProfileFromExternalUri(uri: Uri) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            val profile = repository.learnProfileFromReferenceUri(
+                uri = uri,
+                targetSamples = _pcmSamples.value
+            )
+            _isLoading.value = false
+            if (profile != null) {
+                _learnedProfile.value = profile
+                _referenceOffsetMs.value = profile.detectedOffsetMs
+                _userMessage.value = "Načtena referenční skladba: ${profile.sourceName} (offset: ${profile.detectedOffsetMs} ms)"
+            } else {
+                _userMessage.value = "Nepodařilo se dekódovat referenční soubor"
+            }
+        }
+    }
+
+    fun clearLearnedProfile() {
+        _learnedProfile.value = null
+    }
+
+    fun setReferenceAttenuation(value: Float) {
+        _referenceAttenuation.value = value.coerceIn(0.1f, 1.0f)
+    }
+
+    fun setReferenceMatchGain(value: Float) {
+        _referenceMatchGain.value = value.coerceIn(0.5f, 2.5f)
+    }
+
+    fun setReferenceOffsetMs(offsetMs: Long) {
+        _referenceOffsetMs.value = offsetMs.coerceAtLeast(0L)
+    }
+
+    fun setProtectVoiceFormants(enabled: Boolean) {
+        _protectVoiceFormants.value = enabled
+    }
+
+    fun applyLearnedProfileToWholeTrack() {
+        val selected = _selectedAudio.value ?: return
+        val profile = _learnedProfile.value ?: return
+
+        viewModelScope.launch {
+            _isLoading.value = true
+            val cleanedTrack = repository.subtractLearnedProfileAndSave(
+                sourceFile = File(selected.filePath),
+                profile = profile,
+                attenuationStrength = _referenceAttenuation.value,
+                spectralMatchGain = _referenceMatchGain.value,
+                timeOffsetMs = _referenceOffsetMs.value,
+                protectVoiceFormants = _protectVoiceFormants.value
+            )
+            _isLoading.value = false
+            if (cleanedTrack != null) {
+                _userMessage.value = "Nahrávka vyčištěna od vzorku/hudby: ${cleanedTrack.fileName}"
+                loadAudioFiles(autoSelectFirst = false)
+                selectAudioFile(cleanedTrack)
+            } else {
+                _userMessage.value = "Chyba při odečítání spektrálního vzorku"
+            }
+        }
     }
 
     fun toggleAbLoop(enabled: Boolean) {

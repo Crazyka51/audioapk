@@ -2,11 +2,15 @@ package com.example.data
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import com.example.dsp.AudioDecoder
 import com.example.dsp.BiquadFilter
 import com.example.dsp.FilterType
+import com.example.dsp.LearnedSpectralProfile
+import com.example.dsp.ReferenceAudioCanceller
 import com.example.dsp.SpectralNoiseGate
 import com.example.dsp.SyntheticAudioGenerator
+import com.example.dsp.VoiceSeparator
 import com.example.dsp.WavAudioData
 import com.example.dsp.WavHelper
 import com.example.dsp.WhisperCompressor
@@ -56,6 +60,7 @@ class AudioDetectiveRepository(private val context: Context) {
             }
 
             val status = when {
+                file.name.contains("VoiceSep", ignoreCase = true) || file.name.contains("Isolated", ignoreCase = true) -> AudioStatus.VOICE_SEPARATED
                 file.name.contains("Cleaned", ignoreCase = true) || file.name.contains("Processed", ignoreCase = true) -> AudioStatus.CLEANED
                 file.name.contains("HPF", ignoreCase = true) -> AudioStatus.HPF_ACTIVE
                 file.name.contains("Boost", ignoreCase = true) -> AudioStatus.WHISPER_BOOSTED
@@ -90,10 +95,12 @@ class AudioDetectiveRepository(private val context: Context) {
 
     suspend fun importAudio(uri: Uri, originalName: String?): AudioFileItem? = withContext(Dispatchers.IO) {
         val decoded = AudioDecoder.decodeToPcm(context, uri) ?: return@withContext null
-        val safeName = (originalName ?: "Imported_${System.currentTimeMillis()}")
-            .replace(".mp3", "", ignoreCase = true)
-            .replace(".m4a", "", ignoreCase = true)
-            .replace(".wav", "", ignoreCase = true)
+        val resolvedName = originalName ?: resolveDisplayName(uri) ?: "Imported_${System.currentTimeMillis()}"
+        val safeName = resolvedName
+            .substringBeforeLast(".")
+            .replace(Regex("[^a-zA-Z0-9_\\- ]"), "_")
+            .trim()
+            .ifBlank { "Imported_${System.currentTimeMillis()}" }
         val targetFile = File(recordingsDir, "${safeName}.wav")
 
         WavHelper.writeWav(targetFile, decoded.samples, decoded.sampleRate, 1)
@@ -116,6 +123,19 @@ class AudioDetectiveRepository(private val context: Context) {
         )
     }
 
+    private fun resolveDisplayName(uri: Uri): String? {
+        return try {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0) cursor.getString(idx) else null
+                } else null
+            } ?: uri.lastPathSegment
+        } catch (e: Exception) {
+            uri.lastPathSegment
+        }
+    }
+
     suspend fun processAndSaveFilteredWav(
         sourceFile: File,
         config: DspConfig,
@@ -126,6 +146,18 @@ class AudioDetectiveRepository(private val context: Context) {
         val sampleRate = rawData.sampleRate.toFloat()
 
         val appliedFilters = mutableListOf<String>()
+
+        // 0. STFT Voice Separation (Formant & Wiener Spectral Masking)
+        if (config.voiceSeparationEnabled) {
+            val separator = VoiceSeparator(fftSize = 1024, hopSize = 256, sampleRate = rawData.sampleRate)
+            samples = separator.separate(
+                samples = samples,
+                mode = config.voiceSeparationMode,
+                separationStrength = config.voiceSeparationStrength,
+                formantBoostDb = config.vocalFormantBoostDb
+            )
+            appliedFilters.add("Voice Separation: ${config.voiceSeparationMode.titleCz} (${(config.voiceSeparationStrength * 100).toInt()}%)")
+        }
 
         // 1. High-Pass Filter (Voice isolation)
         if (config.highPassEnabled || config.speechBandpassEnabled) {
@@ -161,7 +193,10 @@ class AudioDetectiveRepository(private val context: Context) {
             appliedFilters.add("Whisper Dynamic Boost (+${config.whisperBoostGainDb.toInt()} dB)")
         }
 
-        val baseName = sourceFile.nameWithoutExtension.substringBefore("_Cleaned").substringBefore("_HPF")
+        val baseName = sourceFile.nameWithoutExtension
+            .substringBefore("_Cleaned")
+            .substringBefore("_VoiceSep")
+            .substringBefore("_HPF")
         val newFileName = "${baseName}_${customSuffix}_${System.currentTimeMillis() % 1000}.wav"
         val outputFile = File(recordingsDir, newFileName)
 
@@ -170,7 +205,11 @@ class AudioDetectiveRepository(private val context: Context) {
         val sizeMb = outputFile.length() / (1024.0 * 1024.0)
         val durMs = (samples.size.toDouble() / rawData.sampleRate * 1000).toLong()
 
-        val status = if (config.whisperBoostEnabled) AudioStatus.WHISPER_BOOSTED else AudioStatus.CLEANED
+        val status = when {
+            config.voiceSeparationEnabled || customSuffix.contains("VoiceSep", ignoreCase = true) -> AudioStatus.VOICE_SEPARATED
+            config.whisperBoostEnabled -> AudioStatus.WHISPER_BOOSTED
+            else -> AudioStatus.CLEANED
+        }
 
         AudioFileItem(
             id = outputFile.absolutePath.hashCode().toString(),
@@ -252,12 +291,19 @@ class AudioDetectiveRepository(private val context: Context) {
         }
 
         val applied = mutableListOf<String>()
+        if (config.voiceSeparationEnabled) {
+            applied.add("STFT Separace hlasu: ${config.voiceSeparationMode.titleCz} (${(config.voiceSeparationStrength * 100).toInt()}%, Formanty +${config.vocalFormantBoostDb.toInt()}dB)")
+        }
         if (config.highPassEnabled || config.speechBandpassEnabled) applied.add("High-Pass 300Hz (Vocal Cut)")
         if (config.lowPassEnabled || config.speechBandpassEnabled) applied.add("Low-Pass 4000Hz")
         if (config.whisperBoostEnabled) applied.add("Whisper Dynamic Expander (+${config.whisperBoostGainDb.toInt()}dB)")
         if (config.noiseReductionEnabled) applied.add("Spectral Subtraction Gate")
         if (config.playbackSpeed != 1.0f) applied.add("Time Stretch (${config.playbackSpeed}x, Pitch Locked)")
         if (config.abLoopEnabled) applied.add("A-B Forensics Loop (${config.loopStartMs}ms - ${config.loopEndMs}ms)")
+
+        val voiceMetrics = VoiceSeparator(fftSize = 1024, hopSize = 256, sampleRate = audioItem.sampleRate)
+            .analyzeVoiceMetrics(samples)
+        val vocalPct = ((voiceMetrics.vocalEnergyRatio * 100f) * 10f).toInt() / 10f
 
         ForensicReport(
             id = UUID.randomUUID().toString(),
@@ -270,10 +316,109 @@ class AudioDetectiveRepository(private val context: Context) {
             peakLevelDb = peakDb,
             rmsLevelDb = rmsDb,
             dynamicRangeDb = dynamicRangeDb,
-            vocalBandEnergyPct = 76.4f,
+            vocalBandEnergyPct = vocalPct,
             detectedWhisperSegments = if (detectedSegments.isEmpty()) listOf(Pair(2000L, 5000L), Pair(6500L, 9500L)) else detectedSegments,
             appliedFilters = applied,
-            analystNotes = "Non-destructive spectral analysis verified. Low-frequency motor hum attenuated. Vocal formants isolated in 300Hz - 3.4kHz window with pitch preserved."
+            analystNotes = "Nedestruktivní FFT spektrální analýza a STFT separace hlasu ověřena. Dominantní formant detekován na ${voiceMetrics.dominantFormantHz.toInt()} Hz (přírůstek SNR +${String.format(Locale.US, "%.1f", voiceMetrics.estimatedSnrImprovementDb)} dB)."
+        )
+    }
+
+    suspend fun learnProfileFromInterval(
+        sourceFile: File,
+        startMs: Long,
+        endMs: Long,
+        trackTitle: String
+    ): LearnedSpectralProfile? = withContext(Dispatchers.Default) {
+        val rawData = loadPcmSamples(sourceFile) ?: return@withContext null
+        val canceller = ReferenceAudioCanceller(fftSize = 1024, hopSize = 256, sampleRate = rawData.sampleRate)
+        canceller.learnFromInterval(
+            samples = rawData.samples,
+            sampleRate = rawData.sampleRate,
+            startMs = startMs,
+            endMs = endMs,
+            trackTitle = trackTitle
+        )
+    }
+
+    suspend fun learnProfileFromReferenceFile(
+        referenceFile: File,
+        targetSamples: FloatArray?
+    ): LearnedSpectralProfile? = withContext(Dispatchers.Default) {
+        val refData = loadPcmSamples(referenceFile) ?: return@withContext null
+        val canceller = ReferenceAudioCanceller(fftSize = 1024, hopSize = 256, sampleRate = refData.sampleRate)
+        canceller.learnFromReferenceTrack(
+            referenceSamples = refData.samples,
+            referenceSampleRate = refData.sampleRate,
+            referenceTitle = referenceFile.nameWithoutExtension,
+            targetSamples = targetSamples
+        )
+    }
+
+    suspend fun learnProfileFromReferenceUri(
+        uri: Uri,
+        targetSamples: FloatArray?
+    ): LearnedSpectralProfile? = withContext(Dispatchers.IO) {
+        val decoded = AudioDecoder.decodeToPcm(context, uri) ?: return@withContext null
+        val displayName = resolveDisplayName(uri)?.substringBeforeLast(".") ?: "Referencni_Skladba"
+        val canceller = ReferenceAudioCanceller(fftSize = 1024, hopSize = 256, sampleRate = decoded.sampleRate)
+        canceller.learnFromReferenceTrack(
+            referenceSamples = decoded.samples,
+            referenceSampleRate = decoded.sampleRate,
+            referenceTitle = displayName,
+            targetSamples = targetSamples
+        )
+    }
+
+    suspend fun subtractLearnedProfileAndSave(
+        sourceFile: File,
+        profile: LearnedSpectralProfile,
+        attenuationStrength: Float,
+        spectralMatchGain: Float,
+        timeOffsetMs: Long,
+        protectVoiceFormants: Boolean
+    ): AudioFileItem? = withContext(Dispatchers.Default) {
+        val rawData = loadPcmSamples(sourceFile) ?: return@withContext null
+        val canceller = ReferenceAudioCanceller(fftSize = 1024, hopSize = 256, sampleRate = rawData.sampleRate)
+        val cleanedSamples = canceller.applyProfileSubtraction(
+            targetSamples = rawData.samples,
+            profile = profile,
+            attenuationStrength = attenuationStrength,
+            spectralMatchGain = spectralMatchGain,
+            timeOffsetMs = timeOffsetMs,
+            protectVoiceFormants = protectVoiceFormants
+        )
+
+        val baseName = sourceFile.nameWithoutExtension
+            .substringBefore("_Cleaned")
+            .substringBefore("_SongRemoved")
+            .substringBefore("_VoiceSep")
+        val suffix = if (profile.sourceType == com.example.dsp.LearnedSourceType.REFERENCE_AUDIO_FILE) {
+            "SongRemoved"
+        } else {
+            "ProfileCleaned"
+        }
+        val newFileName = "${baseName}_${suffix}_${System.currentTimeMillis() % 1000}.wav"
+        val outputFile = File(recordingsDir, newFileName)
+
+        withContext(Dispatchers.IO) {
+            WavHelper.writeWav(outputFile, cleanedSamples, rawData.sampleRate, 1)
+        }
+
+        val sizeMb = outputFile.length() / (1024.0 * 1024.0)
+        val durMs = (cleanedSamples.size.toDouble() / rawData.sampleRate * 1000).toLong()
+
+        AudioFileItem(
+            id = outputFile.absolutePath.hashCode().toString(),
+            title = outputFile.nameWithoutExtension,
+            fileName = outputFile.name,
+            filePath = outputFile.absolutePath,
+            durationMs = durMs,
+            fileSizeFormatted = String.format(Locale.US, "%.1f MB", sizeMb),
+            sampleRate = rawData.sampleRate,
+            bitDepth = 16,
+            channels = 1,
+            status = AudioStatus.CLEANED,
+            createdAt = outputFile.lastModified()
         )
     }
 
@@ -308,6 +453,16 @@ class AudioDetectiveRepository(private val context: Context) {
         val file4 = File(recordingsDir, "Lecture_Noise_Sample.wav")
         if (!file4.exists()) {
             SyntheticAudioGenerator.generateInterviewCase(file4, 44100, 22.0f)
+        }
+
+        val file5 = File(recordingsDir, "Cafe_Wiretap_With_Song.wav")
+        if (!file5.exists()) {
+            SyntheticAudioGenerator.generateCafeWiretapWithSong(file5, 44100, 12.0f)
+        }
+
+        val file6 = File(recordingsDir, "Known_Radio_Song_Reference.wav")
+        if (!file6.exists()) {
+            SyntheticAudioGenerator.generateKnownSongReference(file6, 44100, 12.0f)
         }
     }
 }

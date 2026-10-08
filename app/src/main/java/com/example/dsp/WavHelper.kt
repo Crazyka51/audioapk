@@ -17,12 +17,24 @@ data class WavAudioData(
 object WavHelper {
 
     /**
-     * Reads a 16-bit PCM WAV file and returns normalized FloatArray [-1.0f, 1.0f].
+     * Reads a PCM WAV file and returns normalized FloatArray [-1.0f, 1.0f].
      */
     fun readWav(file: File): WavAudioData? {
         if (!file.exists() || file.length() < 44) return null
         return try {
-            val bytes = file.readBytes()
+            readWavBytes(file.readBytes())
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    /**
+     * Parses a WAV byte array (from local file or ContentResolver stream).
+     */
+    fun readWavBytes(bytes: ByteArray): WavAudioData? {
+        if (bytes.size < 44) return null
+        return try {
             val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
 
             // Check RIFF header
@@ -42,8 +54,9 @@ object WavHelper {
             while (offset + 8 <= bytes.size) {
                 val chunkId = String(bytes, offset, 4)
                 val chunkSize = buffer.getInt(offset + 4)
+                if (chunkSize < 0) break
                 if (chunkId == "fmt ") {
-                    channels = buffer.getShort(offset + 10).toInt()
+                    channels = buffer.getShort(offset + 10).toInt().coerceAtLeast(1)
                     sampleRate = buffer.getInt(offset + 12)
                     bitsPerSample = buffer.getShort(offset + 22).toInt()
                 } else if (chunkId == "data") {
@@ -51,29 +64,37 @@ object WavHelper {
                     dataSize = chunkSize
                     break
                 }
-                offset += 8 + chunkSize
+                offset += 8 + chunkSize + (chunkSize and 1) // word-aligned chunks
             }
 
             if (dataOffset == -1 || dataOffset + dataSize > bytes.size) {
                 dataOffset = 44
-                dataSize = bytes.size - 44
+                dataSize = (bytes.size - 44).coerceAtLeast(0)
             }
 
-            val numSamples = dataSize / (bitsPerSample / 8) / channels
+            val bytesPerSample = (bitsPerSample / 8).coerceAtLeast(1)
+            val bytesPerFrame = bytesPerSample * channels
+            val numSamples = dataSize / bytesPerFrame
             val floatSamples = FloatArray(numSamples)
 
             var sampleIdx = 0
             var byteIdx = dataOffset
-            val bytesPerFrame = (bitsPerSample / 8) * channels
 
-            while (sampleIdx < numSamples && byteIdx + (bitsPerSample / 8) <= bytes.size) {
-                val rawSample: Float = if (bitsPerSample == 16) {
-                    val s = buffer.getShort(byteIdx)
-                    s / 32768.0f
-                } else {
-                    // 8-bit unsigned fallback
-                    val s = (bytes[byteIdx].toInt() and 0xFF) - 128
-                    s / 128.0f
+            while (sampleIdx < numSamples && byteIdx + bytesPerSample <= bytes.size) {
+                val rawSample: Float = when (bitsPerSample) {
+                    16 -> buffer.getShort(byteIdx) / 32768.0f
+                    24 -> {
+                        val b0 = bytes[byteIdx].toInt() and 0xFF
+                        val b1 = bytes[byteIdx + 1].toInt() and 0xFF
+                        val b2 = bytes[byteIdx + 2].toInt() // signed MSB
+                        val s24 = (b2 shl 16) or (b1 shl 8) or b0
+                        s24 / 8388608.0f
+                    }
+                    32 -> buffer.getInt(byteIdx) / 2147483648.0f
+                    else -> {
+                        val s = (bytes[byteIdx].toInt() and 0xFF) - 128
+                        s / 128.0f
+                    }
                 }
                 floatSamples[sampleIdx] = rawSample.coerceIn(-1.0f, 1.0f)
                 sampleIdx++
@@ -83,7 +104,7 @@ object WavHelper {
             WavAudioData(
                 sampleRate = sampleRate,
                 channels = 1, // Downmixed/mono representation
-                bitsPerSample = bitsPerSample,
+                bitsPerSample = 16,
                 samples = floatSamples
             )
         } catch (e: Exception) {
