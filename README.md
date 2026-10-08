@@ -34,8 +34,35 @@ sestaví debug APK na každý push do `main` a lze ho spustit i ručně:
 2. Vyber workflow **Android CI** a klikni na **Run workflow**.
 3. Po dokončení stáhni artifact **AudioDetective-debug-apk** (obsahuje `app-debug.apk`).
 
-APK je podepsané standardním debug klíčem, takže je vhodné pro testování, ne pro
+APK je podepsané debug klíčem, takže je vhodné pro testování, ne pro
 distribuci do Google Play.
+
+### Stabilní podpis APK (aby šly aktualizace přes sebe)
+
+Každý běh CI si původně vygeneroval vlastní debug keystore, takže se podpis mezi buildy
+lišil a Android odmítl instalaci přes předchozí verzi
+(`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) – testování na zařízení pak znamenalo odinstalaci
+a ztrátu dat aplikace.
+
+Řešení: CI si před buildem nasadí **stejný** debug keystore, jaký používá tvůj počítač.
+
+1. Vytvoř base64 svého lokálního klíče (PowerShell):
+
+   ```powershell
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("$env:USERPROFILE\.android\debug.keystore"))
+   ```
+
+2. V GitHubu otevři **Settings → Secrets and variables → Actions → New repository secret**.
+3. Název `DEBUG_KEYSTORE_BASE64`, hodnota je výstup z kroku 1.
+4. Spusť workflow znovu. V logu kroku *Report APK signing certificate* zkontroluj, že
+   `certificate SHA-256 digest` odpovídá tvému klíči:
+
+   ```powershell
+   keytool -list -v -keystore "$env:USERPROFILE\.android\debug.keystore" -storepass android
+   ```
+
+Dokud secret neexistuje, krok se přeskočí a build funguje dál (jen s náhodným klíčem).
+Keystore se do repozitáře necommituje – žije pouze v GitHub Secrets.
 
 ## Testy
 
@@ -43,9 +70,10 @@ distribuci do Google Play.
 gradle :app:testDebugUnitTest
 ```
 
-DSP jádro (`app/src/test/java/com/example/DspUnitTest.kt`) pokrývá FFT, biquad filtry,
-whisper kompresor, STFT separaci hlasu, odečtení známé písničky, cepstrální
-de-reverberaci a adaptivní LMS filtr.
+Testy pokrývají DSP jádro (`DspUnitTest.kt`) – FFT, biquad filtry, whisper kompresor, STFT
+separaci hlasu, odečtení známé písničky, cepstrální de-reverberaci a adaptivní LMS filtr –
+a streamované načítání WAV (`WavHelperTest.kt`) – hlavička, downmix kanálů, přeskakování
+chunků a odmítnutí příliš dlouhé nahrávky.
 
 ## Poznámky
 
