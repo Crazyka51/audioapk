@@ -51,7 +51,8 @@ de-reverberaci a adaptivní LMS filtr.
 
 - Release build vyžaduje `KEYSTORE_PATH`, `STORE_PASSWORD` a `KEY_PASSWORD` v prostředí
   a vlastní `my-upload-key.jks`. Keystore se do repozitáře necommituje.
-- Soubor `.env.example` obsahuje pouze komentovaný placeholder `GEMINI_API_KEY`.
-  Aplikace žádné Gemini API nevolá ani nemá oprávnění `INTERNET`.
+- Aplikace je plně offline: neobsahuje žádné síťové SDK (Firebase / Gemini / Retrofit)
+  ani oprávnění `INTERNET`. Pozůstatky AI Studio scaffoldingu (KSP, Secrets a
+  Google Services pluginy a nepoužité knihovny Room, Moshi, Firebase) byly odstraněny.
 - Dokumentace: [`TECHNICAL_SPECIFICATION.md`](TECHNICAL_SPECIFICATION.md),
   [`DEV_LOG.md`](DEV_LOG.md).
