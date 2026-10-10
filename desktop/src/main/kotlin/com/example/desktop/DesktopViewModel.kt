@@ -211,6 +211,24 @@ class DesktopViewModel {
     fun setLmsIntensity(value: Float) = update { it.copy(adaptiveLmsIntensity = value) }
     fun setLmsPreserve(value: Float) = update { it.copy(adaptiveLmsSpeechPreserve = value) }
 
+    // --- Reference/known-song subtraction tuning --------------------------------------------
+
+    fun setAttenuation(value: Float) {
+        attenuation.value = value.coerceIn(0.3f, 1f)
+    }
+
+    fun setMatchGain(value: Float) {
+        matchGain.value = value.coerceIn(0.5f, 2.5f)
+    }
+
+    fun setOffsetMs(value: Long) {
+        offsetMs.value = value.coerceIn(-5000L, 5000L)
+    }
+
+    fun setProtectFormants(value: Boolean) {
+        protectFormants.value = value
+    }
+
     // --- Import / export -------------------------------------------------------------------
 
     fun importFile(source: File) {

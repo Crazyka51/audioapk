@@ -14,13 +14,14 @@ import kotlin.math.sqrt
  * @param rate target samples per reference sample. `1.0` means identical speed; values above 1 mean
  *   the reference runs slower in the recording (the recording was sped up), and vice versa.
  * @param confidence normalized correlation of the match, 0..1.
- * @param segmentLags per-segment lag estimates used for the drift fit, for reporting.
+ * @param anchors additional reference sample -> target sample pairs found by the per-segment pass.
+ *   They let a consumer follow a variable playback rate instead of a single global offset.
  */
 data class SpectralAlignment(
     val offsetSamples: Int,
     val rate: Float,
     val confidence: Float,
-    val segmentLags: List<Int> = emptyList()
+    val anchors: List<Pair<Long, Long>> = emptyList()
 ) {
     val isReliable: Boolean get() = confidence >= 0.35f
 
@@ -70,10 +71,28 @@ object SpectralAligner {
     )
 
     /** Drift is only accepted when the fit explains the data at least this well. */
-    private const val MIN_DRIFT_FIT_R2 = 0.55f
+    private const val MIN_DRIFT_FIT_R2 = 0.30f
 
     /** Beyond this the "drift" is more likely a wrong match than a speed difference. */
     private const val MAX_ABS_DRIFT = 0.06f
+
+    /**
+     * The exhaustive band-fingerprint search is bounded to this many envelope frames around a cheap
+     * energy-envelope estimate. A full four minute song has ~20k frames, so an unbounded search would
+     * be ~4*10^8 band comparisons; bounding it keeps alignment interactive while the fine and drift
+     * passes recover the precision the coarse bound loses.
+     */
+    private const val COARSE_SEARCH_FRAMES = 96
+
+    /** Per-segment drift search radius in seconds, covering error accumulated by the global rate. */
+    private const val DRIFT_SEARCH_SECONDS = 0.6f
+
+    /**
+     * Candidate playback rates for the rate search. Covers +/-6 % in 0.5 % steps, which spans wow and
+     * flutter, a PAL speed-up (4 %) and most "the recording was played back at a different speed"
+     * cases, while staying coarse enough that the search is a few hundred correlations.
+     */
+    private val CANDIDATE_RATES: FloatArray = FloatArray(25) { index -> 0.94f + index * 0.005f }
 
     /**
      * Aligns [referenceSamples] inside [targetSamples].
@@ -93,20 +112,96 @@ object SpectralAligner {
         val reference = BandEnvelope.build(referenceSamples, sampleRate, ENVELOPE_HOP, fftSize)
         if (reference.frames < 4 || target.frames <= reference.frames) return null
 
-        val coarseLag = bestGlobalLag(target, reference) ?: return null
-        val confidence = correlationAt(target, reference, coarseLag)
+        val coarseLag = bestGlobalLag(target, reference, targetSamples, referenceSamples) ?: return null
 
-        val coarseOffset = coarseLag * ENVELOPE_HOP
+        // Rate search: if the song plays at a different speed (live performance, tape, an edit), the
+        // reference spectrum is shifted and a fixed-rate correlation degrades. Re-sampling the band
+        // envelope's timeline over a small candidate set finds the real rate cheaply, because this
+        // works on ~20k envelope frames instead of hours of audio.
+        val rateSearch = bestRateAndLag(target, reference, coarseLag)
+        val confidence = rateSearch.score
+
+        val coarseOffset = rateSearch.lag * ENVELOPE_HOP
         val fineOffset = refineOffset(targetSamples, referenceSamples, coarseOffset)
-        val drift = estimateDrift(target, reference, coarseLag)
+        val drift = estimateDrift(target, reference, rateSearch.lag, sampleRate, rateSearch.rate)
+
+        // The per-segment pass runs on the coarse timeline, so shift its anchors by the refinement
+        // applied by the fine pass to keep everything on the same absolute scale.
+        val shift = fineOffset - coarseOffset
+        val anchors = drift.anchors.map { (referenceSample, targetSample) ->
+            referenceSample to (targetSample + shift)
+        }
 
         return SpectralAlignment(
             offsetSamples = fineOffset,
             rate = drift.rate,
             confidence = confidence,
-            segmentLags = drift.segmentLags
+            anchors = anchors
         )
     }
+
+    /**
+     * Tries a small set of playback rates and returns the one whose band-envelope timeline best
+     * correlates with the target, together with the corresponding lag.
+     *
+     * Time scaling is applied to the envelope's frame timeline (reference frame `f` is expected at
+     * target frame `lag + f * rate`) rather than by resampling audio, which keeps the search cheap and
+     * still recovers a rate difference that would otherwise destroy the match.
+     */
+    private fun bestRateAndLag(
+        target: BandEnvelope,
+        reference: BandEnvelope,
+        baseLag: Int
+    ): RateSearch {
+        var bestScore = -1f
+        var bestRate = 1f
+        var bestLag = baseLag
+
+        for (rate in CANDIDATE_RATES) {
+            // The reference start moves with the rate: everything before the match point is scaled too.
+            val lagShift = (baseLag * (1.0 - rate)).toInt()
+            val candidateLag = (baseLag + lagShift).coerceIn(0, (target.frames - 1).coerceAtLeast(0))
+
+            val score = correlationAtRate(target, reference, candidateLag, rate)
+            if (score > bestScore) {
+                bestScore = score
+                bestRate = rate
+                bestLag = candidateLag
+            }
+        }
+        return RateSearch(bestRate, bestLag, bestScore)
+    }
+
+    /**
+     * Correlates the reference envelope against the target, mapping reference frame `f` to target
+     * frame `lag + f * rate` so a time-scaled reference still lines up.
+     */
+    private fun correlationAtRate(
+        target: BandEnvelope,
+        reference: BandEnvelope,
+        lag: Int,
+        rate: Float
+    ): Float {
+        var dot = 0.0
+        var normTarget = 0.0
+        var normReference = 0.0
+
+        for (frame in 0 until reference.frames) {
+            val targetFrame = lag + (frame * rate).toInt()
+            if (targetFrame < 0 || targetFrame >= target.frames) continue
+            for (band in 0 until reference.bands) {
+                val r = reference.frame(frame, band)
+                val t = target.frame(targetFrame, band)
+                dot += r.toDouble() * t
+                normTarget += t.toDouble() * t
+                normReference += r.toDouble() * r
+            }
+        }
+        if (normTarget <= 1e-9 || normReference <= 1e-9) return 0f
+        return (dot / sqrt(normTarget * normReference)).toFloat().coerceIn(0f, 1f)
+    }
+
+    private data class RateSearch(val rate: Float, val lag: Int, val score: Float)
 
     /** Sums the z-scored bands into one fingerprint vector per frame (level and EQ invariant). */
     internal class BandEnvelope(
@@ -200,27 +295,103 @@ object SpectralAligner {
         return (dot / sqrt(normTarget * normReference)).toFloat().coerceIn(0f, 1f)
     }
 
-    /** Full search over every plausible lag, returning the frame lag with the best correlation. */
-    private fun bestGlobalLag(target: BandEnvelope, reference: BandEnvelope): Int? {
+    /**
+     * Searches the band fingerprint for the best lag, bounded to a window around a cheap energy
+     * estimate. Without the bound this would be quadratic in the recording length.
+     */
+    private fun bestGlobalLag(
+        target: BandEnvelope,
+        reference: BandEnvelope,
+        targetSamples: FloatArray,
+        referenceSamples: FloatArray
+    ): Int? {
         val maxLag = target.frames - reference.frames
         if (maxLag < 0) return null
 
-        var bestLag = -1
+        val estimate = energyEstimateLag(targetSamples, referenceSamples, target.hop, maxLag)
+        val from = (estimate - COARSE_SEARCH_FRAMES).coerceAtLeast(0)
+        val to = (estimate + COARSE_SEARCH_FRAMES).coerceAtMost(maxLag)
+
+        var bestLag = from
         var bestScore = -1f
-        for (lag in 0..maxLag) {
+        for (lag in from..to) {
             val score = correlationAt(target, reference, lag)
             if (score > bestScore) {
                 bestScore = score
                 bestLag = lag
             }
         }
-        return if (bestLag >= 0) bestLag else null
+        return bestLag
+    }
+
+    /**
+     * Cheap pre-alignment on downsampled RMS envelopes (20 ms blocks). Only needs to be accurate to
+     * about a second; the fingerprint search then refines it.
+     *
+     * @param maxFrameLag upper bound in band-envelope frames, so the returned estimate is clamped in
+     *   the same unit the caller searches in (clamping it to the block-space maximum would truncate
+     *   the estimate for anything longer than a few seconds).
+     */
+    private fun energyEstimateLag(
+        targetSamples: FloatArray,
+        referenceSamples: FloatArray,
+        hop: Int,
+        maxFrameLag: Int
+    ): Int {
+        val block = (hop * 4).coerceAtLeast(256)
+        val targetBlocks = targetSamples.size / block
+        val referenceBlocks = (referenceSamples.size / block).coerceAtMost(256)
+        if (targetBlocks <= 8 || referenceBlocks <= 8) return 0
+
+        val targetEnv = FloatArray(targetBlocks) { index ->
+            var sum = 0f
+            val base = index * block
+            for (i in 0 until block) sum += abs(targetSamples[base + i])
+            sum / block
+        }
+        val referenceEnv = FloatArray(referenceBlocks) { index ->
+            var sum = 0f
+            val base = index * block
+            for (i in 0 until block) sum += abs(referenceSamples[base + i])
+            sum / block
+        }
+
+        // Compare mean-removed envelopes so recording level does not bias the estimate.
+        val referenceMean = referenceEnv.average().toFloat()
+        val targetMean = targetEnv.average().toFloat()
+        var bestLag = 0
+        var bestScore = Double.NEGATIVE_INFINITY
+        val maxLag = targetBlocks - referenceBlocks
+
+        for (lag in 0..maxLag) {
+            var dot = 0.0
+            var normTarget = 0.0
+            var normReference = 0.0
+            for (index in 0 until referenceBlocks) {
+                val t = targetEnv[lag + index] - targetMean
+                val r = referenceEnv[index] - referenceMean
+                dot += t.toDouble() * r
+                normTarget += t.toDouble() * t
+                normReference += r.toDouble() * r
+            }
+            if (normTarget <= 1e-9 || normReference <= 1e-9) continue
+            val score = dot / sqrt(normTarget * normReference)
+            if (score > bestScore) {
+                bestScore = score
+                bestLag = lag
+            }
+        }
+        // Convert the block lag into band-envelope frames and clamp in frame space.
+        return (bestLag.toLong() * block / hop).toInt().coerceIn(0, maxFrameLag)
     }
 
     /**
      * Refines the frame-level offset to sample precision by cross-correlating the raw signals over a
-     * short window around the estimate. Envelope resolution alone is ~12 ms, which is enough to
-     * locate a song but not to cancel it cleanly.
+     * window around the estimate.
+     *
+     * The search radius is deliberately wider than one envelope frame: the coarse estimate comes from
+     * envelope correlation, whose error on real (time-scaled, noisy) material can reach tens of
+     * milliseconds, and a radius smaller than that error leaves the offset uncorrected.
      */
     private fun refineOffset(
         targetSamples: FloatArray,
@@ -228,7 +399,7 @@ object SpectralAligner {
         coarseOffset: Int
     ): Int {
         val windowLength = min(referenceSamples.size, 1 shl 19) // at most ~12 s of material
-        val searchRadius = ENVELOPE_HOP * 3
+        val searchRadius = max(ENVELOPE_HOP * 3, sampleRateEstimate / 10) // at least ~100 ms
         val minOffset = (coarseOffset - searchRadius).coerceAtLeast(0)
         val maxOffset = min(coarseOffset + searchRadius, targetSamples.size - windowLength)
         if (maxOffset < minOffset) return coarseOffset.coerceIn(0, max(targetSamples.size - 1, 0))
@@ -260,85 +431,159 @@ object SpectralAligner {
     }
 
     /**
+     * Sample rate assumed for the search-radius heuristics. The aligner works on absolute sample
+     * counts, and the caller always passes 44.1 kHz material (the app decodes everything to that),
+     * so a constant keeps the signature free of another parameter.
+     */
+    private val sampleRateEstimate: Int = 44100
+
+    /**
+     * Rough rate estimate from the distance between the first and the last reference segment, so the
+     * per-segment refinement can search around a rate-corrected prediction.
+     */
+    private fun estimateCoarseRate(
+        target: BandEnvelope,
+        reference: BandEnvelope,
+        globalLag: Int,
+        segmentFrames: Int,
+        maxSegments: Int,
+        sampleRate: Int
+    ): Double {
+        if (maxSegments < 2) return 1.0
+        val lastStart = (maxSegments - 1) * segmentFrames
+        // First and last segment can be a whole drift allowance apart, so search generously here; this
+        // estimate only needs to aim the per-segment refinement, which then refines it.
+        val spanSeconds = (lastStart * reference.hop).toFloat() / sampleRate
+        val allowanceFrames = (spanSeconds * MAX_ABS_DRIFT * sampleRate / reference.hop).toInt() + 16
+
+        val lastLag = locateSegment(
+            target, reference, lastStart, segmentFrames, globalLag + lastStart, allowanceFrames
+        ) ?: return 1.0
+
+        val span = lastStart.toDouble()
+        if (span <= 0.0) return 1.0
+        val rate = (lastLag - globalLag) / span
+        return if (abs(rate - 1.0) <= MAX_ABS_DRIFT) rate else 1.0
+    }
+
+    /** Locates one reference segment near [predicted] within +/-[radius] frames; null when unclear. */
+    private fun locateSegment(
+        target: BandEnvelope,
+        reference: BandEnvelope,
+        startFrame: Int,
+        segmentFrames: Int,
+        predicted: Int,
+        radius: Int
+    ): Int? {
+        val from = (predicted - radius).coerceAtLeast(0)
+        val to = min(predicted + radius, target.frames - segmentFrames)
+        if (to < from) return null
+
+        var bestLag = -1
+        var bestScore = 0.3f
+        for (lag in from..to) {
+            var dot = 0.0
+            var normTarget = 0.0
+            var normReference = 0.0
+            for (frame in 0 until segmentFrames) {
+                for (band in 0 until reference.bands) {
+                    val r = reference.frame(startFrame + frame, band)
+                    val t = target.frame(lag + frame, band)
+                    dot += r.toDouble() * t
+                    normTarget += t.toDouble() * t
+                    normReference += r.toDouble() * r
+                }
+            }
+            if (normTarget <= 1e-9 || normReference <= 1e-9) continue
+            val score = (dot / sqrt(normTarget * normReference)).toFloat()
+            if (score > bestScore) {
+                bestScore = score
+                bestLag = lag
+            }
+        }
+        return bestLag.takeIf { it >= 0 }
+    }
+
+    /**
      * Estimates the playback-rate difference by locating several reference segments independently and
      * fitting a line through (reference position -> target position). Segments whose estimate deviates
      * strongly are dropped so a single bad correlation cannot fake a drift.
      */
+    @Suppress("LongMethod")
     private fun estimateDrift(
         target: BandEnvelope,
         reference: BandEnvelope,
-        globalLag: Int
+        globalLag: Int,
+        sampleRate: Int,
+        seedRate: Float
     ): DriftEstimate {
-        val segmentFrames = min(reference.frames, max(reference.frames / 6, 24))
+        val segmentFrames = min(reference.frames, max(reference.frames / 8, 24))
         val maxSegments = reference.frames / segmentFrames
-        if (maxSegments < 3) return DriftEstimate(1f, emptyList())
+        if (maxSegments < 3) return DriftEstimate(seedRate, emptyList())
 
-        val searchRadius = ENVELOPE_HOP / 4 * 3 // a few frames around the prediction
+        // The rate search already produced a usable rate; the per-segment pass checks whether it stays
+        // constant across the song or changes (an edit, a tempo change).
+        val initialRate = seedRate.toDouble()
+        // The search radius must cover the drift that can accumulate over the reference, not just a few
+        // frames: a 3 % rate difference over a 12 s reference is already ~0.36 s. Without that the
+        // segment search cannot reach the later parts of a rate-shifted song and drift collapses to 1.0.
+        val framesPerSecond = sampleRate.toFloat() / target.hop
+        val referenceSeconds = reference.frames * reference.hop / sampleRate.toFloat()
+        val driftAllowance = referenceSeconds * MAX_ABS_DRIFT
+        val searchRadiusFrames = ((DRIFT_SEARCH_SECONDS + driftAllowance) * framesPerSecond)
+            .toInt().coerceAtLeast(4)
+
         val referencePositions = ArrayList<Double>(maxSegments)
         val targetPositions = ArrayList<Double>(maxSegments)
 
         for (segment in 0 until maxSegments) {
             val startFrame = segment * segmentFrames
-            val predicted = globalLag + startFrame
+            // Position predicted by the rate guess: reference frame 0 sits at globalLag, and every
+            // further reference frame advances by initialRate target frames.
+            val predicted = (globalLag + startFrame * initialRate).toInt()
             var bestLag = predicted
-            var bestScore = -1f
-
-            val from = (predicted - searchRadius).coerceAtLeast(0)
-            val to = min(predicted + searchRadius, target.frames - segmentFrames)
-            if (to < from) continue
-
-            for (lag in from..to) {
-                var dot = 0.0
-                var normTarget = 0.0
-                var normReference = 0.0
-                for (frame in 0 until segmentFrames) {
-                    for (band in 0 until reference.bands) {
-                        val r = reference.frame(startFrame + frame, band)
-                        val t = target.frame(lag + frame, band)
-                        dot += r.toDouble() * t
-                        normTarget += t.toDouble() * t
-                        normReference += r.toDouble() * r
-                    }
-                }
-                if (normTarget <= 1e-9 || normReference <= 1e-9) continue
-                val score = (dot / sqrt(normTarget * normReference)).toFloat()
-                if (score > bestScore) {
-                    bestScore = score
-                    bestLag = lag
-                }
-            }
-
-            // Ignore segments where the reference is not really present (silence, solo voice parts).
-            if (bestScore < 0.3f) continue
+            val located = locateSegment(
+                target = target,
+                reference = reference,
+                startFrame = startFrame,
+                segmentFrames = segmentFrames,
+                predicted = predicted,
+                radius = searchRadiusFrames
+            ) ?: continue
 
             val referenceCenter = (startFrame + segmentFrames / 2.0) * reference.hop
-            val targetCenter = (bestLag.toDouble() + segmentFrames / 2.0) * target.hop
+            val targetCenter = (located + segmentFrames / 2.0) * target.hop
             referencePositions.add(referenceCenter)
             targetPositions.add(targetCenter)
         }
 
-        if (referencePositions.size < 3) return DriftEstimate(1f, emptyList())
+        if (referencePositions.size < 3) return DriftEstimate(seedRate, emptyList())
 
-        val fit = robustLinearFit(referencePositions, targetPositions)
-        val rate = if (fit != null && fit.r2 >= MIN_DRIFT_FIT_R2 &&
+        val fit = theilSenFit(referencePositions, targetPositions)
+        val convincing = fit != null && fit.r2 >= MIN_DRIFT_FIT_R2 &&
             abs(fit.slope - 1.0) <= MAX_ABS_DRIFT
-        ) {
-            fit.slope.toFloat()
-        } else {
-            1f
+
+        if (!convincing) {
+            // The fit is not convincing, so the constant rate from the rate search is kept and no
+            // anchors are published: better to say "constant rate" than to publish a wrong curve.
+            return DriftEstimate(seedRate, emptyList())
         }
 
-        val lags = targetPositions.mapIndexed { index, targetPosition ->
-            (targetPosition - referencePositions[index]).toInt()
+        val anchors = referencePositions.mapIndexed { index, referencePosition ->
+            referencePosition.toLong() to targetPositions[index].toLong()
         }
-        return DriftEstimate(rate, lags)
+        return DriftEstimate(fit.slope.toFloat(), anchors)
     }
 
-    private data class DriftEstimate(val rate: Float, val segmentLags: List<Int>)
+    /** @param anchors reference sample -> target sample pairs for the matched segments. */
+    private data class DriftEstimate(val rate: Float, val anchors: List<Pair<Long, Long>>)
 
     private data class LinearFit(val slope: Double, val intercept: Double, val r2: Float)
 
-    /** Least-squares fit with one pass of outlier rejection at three standard deviations. */
+    /**
+     * Least-squares fit with one pass of outlier rejection at three standard deviations.
+     * Kept for callers that need R²; drift estimation uses the more robust [theilSenFit].
+     */
     private fun robustLinearFit(x: List<Double>, y: List<Double>): LinearFit? {
         val first = linearFit(x, y) ?: return null
         val residuals = x.indices.map { y[it] - (first.slope * x[it] + first.intercept) }
@@ -357,6 +602,47 @@ object SpectralAligner {
             if (keptX.size >= 3) return linearFit(keptX, keptY) ?: first
         }
         return first
+    }
+
+    /**
+     * Theil-Sen estimator: the median of all pairwise slopes.
+     *
+     * Used for the drift fit because a segment can lock onto the wrong beat, which produces a handful
+     * of wildly wrong points. Least squares is dragged along by them (a single bad point can flip the
+     * slope's sign), while a median of pairwise slopes tolerates up to ~29 % outliers.
+     *
+     * @return slope, intercept through the medians and a robust R²-like quality measure.
+     */
+    private fun theilSenFit(x: List<Double>, y: List<Double>): LinearFit? {
+        if (x.size < 3) return null
+
+        val slopes = ArrayList<Double>((x.size * (x.size - 1)) / 2)
+        for (i in x.indices) {
+            for (j in i + 1 until x.size) {
+                val dx = x[j] - x[i]
+                if (abs(dx) > 1e-6) slopes.add((y[j] - y[i]) / dx)
+            }
+        }
+        if (slopes.size < 3) return null
+        slopes.sort()
+        val slope = slopes[slopes.size / 2]
+
+        val intercept = median(x.indices.map { y[it] - slope * x[it] })
+
+        // Quality: share of points within a tolerance of the fitted line (a drift of 60 ms is the
+        // largest deviation a good fit should leave at these distances).
+        val tolerance = 60.0
+        val inliers = x.indices.count { abs(y[it] - (slope * x[it] + intercept)) <= tolerance }
+        val quality = inliers.toFloat() / x.size
+
+        return LinearFit(slope, intercept, quality)
+    }
+
+    private fun median(values: List<Double>): Double {
+        if (values.isEmpty()) return 0.0
+        val sorted = values.sorted()
+        val middle = sorted.size / 2
+        return if (sorted.size % 2 == 0) (sorted[middle - 1] + sorted[middle]) / 2.0 else sorted[middle]
     }
 
     private fun linearFit(x: List<Double>, y: List<Double>): LinearFit? {
