@@ -71,6 +71,7 @@ class DesktopAudioPlayer {
     private var writerGeneration: Int = 0
 
     private var line: SourceDataLine? = null
+    private var lineSampleRate: Int = -1
     private var writerJob: Job? = null
     private var prepareJob: Job? = null
 
@@ -194,12 +195,19 @@ class DesktopAudioPlayer {
     }
 
     private fun startWriter(fromFrame: Long) {
+        val previousJob = writerJob
         stopWriter()
         val samples = processedSamples ?: return
         val rate = sampleRate
         val generation = writerGeneration
 
         writerJob = scope.launch {
+            // A previous writer (from the play/pause/seek just replaced) may still be finishing a
+            // blocking line.write() call on another thread; SourceDataLine is not safe to touch from
+            // two threads at once, so wait for it to fully exit before this one opens/restarts the
+            // line. Without this, rapid seeking (dragging the position slider) or a quick
+            // pause-then-play could race on the same line and leave it stuck.
+            previousJob?.join()
             val output = ensureLine(rate) ?: return@launch
             var frame = fromFrame.coerceIn(0L, samples.size.toLong())
             val bytes = ByteArray(blockFrames * 2)
@@ -264,8 +272,10 @@ class DesktopAudioPlayer {
     }
 
     private fun stopWriter() {
+        // Deliberately not clearing writerJob here: it may still be finishing a blocking line write
+        // on another thread, and the next startWriter() call needs this same reference so it can
+        // wait for that write to actually finish before touching the line again (see startWriter).
         writerJob?.cancel()
-        writerJob = null
         line?.let { active ->
             try {
                 active.stop()
@@ -282,7 +292,17 @@ class DesktopAudioPlayer {
     }
 
     private fun ensureLine(rate: Int): SourceDataLine? {
-        line?.let { if (it.isOpen) return it }
+        line?.let {
+            if (it.isOpen && lineSampleRate == rate) {
+                // pause()/seek() stop (but do not close) the line to flush stale buffered audio; if
+                // it is not restarted here, writes just queue up until the never-draining buffer
+                // fills and the writer coroutine blocks on write() forever - which is what used to
+                // make playback silently freeze a fraction of a second after resuming.
+                if (!it.isRunning) it.start()
+                return it
+            }
+        }
+        closeLine()
         return try {
             val format = AudioFormat(rate.toFloat(), 16, 1, true, false)
             val info = DataLine.Info(SourceDataLine::class.java, format)
@@ -290,6 +310,7 @@ class DesktopAudioPlayer {
             opened.open(format, blockFrames * 8)
             opened.start()
             line = opened
+            lineSampleRate = rate
             opened
         } catch (e: Exception) {
             e.printStackTrace()
@@ -306,5 +327,6 @@ class DesktopAudioPlayer {
             }
         }
         line = null
+        lineSampleRate = -1
     }
 }
