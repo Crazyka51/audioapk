@@ -556,6 +556,14 @@ private fun StudioTab(
                 onLearnFromFile = { pickAudioFile()?.let(viewModel::learnFromReferenceFile) },
                 onApplyProfile = viewModel::applyProfile,
                 onClearProfile = viewModel::clearProfile,
+                attenuation = viewModel.attenuation.collectAsState().value,
+                matchGain = viewModel.matchGain.collectAsState().value,
+                offsetMs = viewModel.offsetMs.collectAsState().value,
+                protectFormants = viewModel.protectFormants.collectAsState().value,
+                onAttenuation = viewModel::setAttenuation,
+                onMatchGain = viewModel::setMatchGain,
+                onOffset = viewModel::setOffsetMs,
+                onProtectFormants = viewModel::setProtectFormants,
                 onApplyCleaned = { viewModel.applyAndSave("Cleaned") },
                 modifier = Modifier.fillMaxHeight()
             )

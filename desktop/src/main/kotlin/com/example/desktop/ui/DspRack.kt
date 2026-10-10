@@ -68,6 +68,14 @@ fun DspRack(
     onApplyProfile: () -> Unit,
     onClearProfile: () -> Unit,
     onApplyCleaned: () -> Unit,
+    attenuation: Float = 0.88f,
+    matchGain: Float = 1.20f,
+    offsetMs: Long = 0L,
+    protectFormants: Boolean = true,
+    onAttenuation: (Float) -> Unit = {},
+    onMatchGain: (Float) -> Unit = {},
+    onOffset: (Long) -> Unit = {},
+    onProtectFormants: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -141,8 +149,32 @@ fun DspRack(
                 OutlinedButton(onClick = onLearnFromAb, enabled = !busy) { Text("Learn A-B") }
                 OutlinedButton(onClick = onLearnFromFile, enabled = !busy) { Text("Learn file") }
             }
+
+            // Manual tuning of the subtraction. The automatic alignment and volume match handle the
+            // common case, but a partial imprint left over a track usually needs a nudge.
+            ValueSlider(
+                "Subtraction strength", attenuation, 0.3f..1f,
+                "${(attenuation * 100).toInt()} %", onAttenuation
+            )
+            ValueSlider(
+                "Volume match", matchGain, 0.5f..2.5f,
+                "%.2fx".format(matchGain), onMatchGain
+            )
+            ValueSlider(
+                "Time offset", offsetMs.toFloat(), -5000f..5000f,
+                "%d ms".format(offsetMs), { onOffset(it.toLong()) }
+            )
+            SwitchRow("Protect speech formants (300-3400 Hz)", protectFormants, onProtectFormants)
+
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onApplyProfile, enabled = hasProfile && !busy) { Text("Subtract from whole track") }
+                Button(
+                    onClick = onApplyProfile,
+                    enabled = hasProfile && !busy,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ForensicOrange.copy(alpha = 0.85f),
+                        contentColor = Color(0xFF1A0A04)
+                    )
+                ) { Text("Subtract from whole track") }
                 TextButton(onClick = onClearProfile, enabled = hasProfile) { Text("Clear") }
             }
         }

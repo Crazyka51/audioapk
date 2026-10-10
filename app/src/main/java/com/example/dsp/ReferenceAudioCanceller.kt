@@ -14,6 +14,195 @@ enum class LearnedSourceType(val labelCz: String) {
 }
 
 /**
+ * Time-varying magnitude reference of a whole song, stored compactly.
+ *
+ * A four minute song at 44.1 kHz needs ~20k frames of 512 bins. Kept as floats that is 42 MB, which
+ * is why the previous implementation truncated the reference to the first ~70 s and then looped it -
+ * subtracting the beginning of the song repeatedly for anything longer. Quantizing each bin to one
+ * byte of dB keeps a full length song at ~10 MB, so the whole track can be referenced.
+ *
+ * @param hopSamples distance between stored frames in reference samples.
+ * @param bins number of stored spectrum bins.
+ * @param frames number of stored frames.
+ * @param quantizedDb one byte per bin: 0 = full scale, 255 = [DYNAMIC_FLOOR_DB].
+ * @param magnitudeRef magnitude that maps to 0 dB.
+ */
+class DynamicReference(
+    val hopSamples: Int,
+    val bins: Int,
+    val frames: Int,
+    private val quantizedDb: ByteArray,
+    magnitudeRef: Float
+) {
+    /**
+     * Decoding table: one linear magnitude per byte code. Precomputed because decoding per bin with
+     * pow() during subtraction would cost tens of millions of calls on a four minute song.
+     */
+    private val codeToLinear = FloatArray(256) { code ->
+        if (code == 0) {
+            magnitudeRef
+        } else {
+            val db = -(code / 255f) * DYNAMIC_RANGE_DB
+            magnitudeRef * kotlin.math.pow(10f, db / 20f)
+        }
+    }
+
+    /** Fills [out] with the decoded magnitudes of one frame. */
+    fun fillColumn(frame: Int, out: FloatArray) {
+        val clamped = frame.coerceIn(0, frames - 1)
+        val base = clamped * bins
+        val count = minOf(bins, out.size)
+        for (bin in 0 until count) {
+            out[bin] = codeToLinear[quantizedDb[base + bin].toInt() and 0xFF]
+        }
+    }
+
+    /** Approximate heap footprint in bytes, for reporting. */
+    val sizeBytes: Long get() = quantizedDb.size.toLong()
+
+    companion object {
+        const val DYNAMIC_RANGE_DB = 84f
+
+        /**
+         * Builds a quantized reference covering [samples] completely.
+         *
+         * @param hopSamples storage hop; the caller picks it from the material length.
+         */
+        fun build(
+            samples: FloatArray,
+            hopSamples: Int,
+            fftSize: Int,
+            fft: FftProcessor,
+            window: FloatArray
+        ): DynamicReference? {
+            if (samples.size < fftSize || hopSamples < 1) return null
+            val bins = fftSize / 2
+            val frames = (samples.size - fftSize) / hopSamples + 1
+            if (frames <= 0) return null
+
+            val quantized = ByteArray(frames * bins)
+            val real = FloatArray(fftSize)
+            val imag = FloatArray(fftSize)
+
+            // First pass for the global magnitude reference so the dB range is used fully.
+            var peak = 0f
+            for (frame in 0 until frames) {
+                val offset = frame * hopSamples
+                for (i in 0 until fftSize) {
+                    real[i] = samples[offset + i] * window[i]
+                    imag[i] = 0f
+                }
+                fft.forward(real, imag)
+                for (bin in 0 until bins) {
+                    val magnitude = kotlin.math.sqrt(real[bin] * real[bin] + imag[bin] * imag[bin])
+                    if (magnitude > peak) peak = magnitude
+                }
+            }
+            if (peak <= 1e-9f) return null
+            val magnitudeRef = peak
+
+            for (frame in 0 until frames) {
+                val offset = frame * hopSamples
+                for (i in 0 until fftSize) {
+                    real[i] = samples[offset + i] * window[i]
+                    imag[i] = 0f
+                }
+                fft.forward(real, imag)
+                val base = frame * bins
+                for (bin in 0 until bins) {
+                    val magnitude = kotlin.math.sqrt(real[bin] * real[bin] + imag[bin] * imag[bin])
+                    val ratio = (magnitude / magnitudeRef).coerceAtLeast(1e-9f)
+                    val db = 20f * kotlin.math.ln(ratio) / kotlin.math.ln(10f)
+                    val code = ((-db / DYNAMIC_RANGE_DB) * 255f).toInt().coerceIn(0, 255)
+                    quantized[base + bin] = code.toByte()
+                }
+            }
+
+            return DynamicReference(hopSamples, bins, frames, quantized, magnitudeRef)
+        }
+    }
+}
+
+/**
+ * Position mapping between the reference song and the recording, sampled at several points so a
+ * variable playback rate (live performance, tape wow, an edit) is followed instead of assumed.
+ *
+ * @param anchors pairs of reference sample -> target sample, sorted by reference position.
+ * @param rate global rate fallback used outside the anchored range.
+ * @param confidence 0..1 match confidence from [SpectralAligner].
+ */
+data class ReferenceAlignment(
+    val anchors: List<Pair<Long, Long>> = emptyList(),
+    val rate: Float = 1f,
+    val confidence: Float = 0f
+) {
+    val isReliable: Boolean get() = confidence >= 0.35f
+
+    /**
+     * Expected position in the recording for a reference sample, using piecewise linear interpolation
+     * between anchors so variable speed within the song is tracked.
+     */
+    fun targetPositionOf(referenceSample: Long): Double {
+        if (anchors.isEmpty()) return referenceSample * rate.toDouble()
+
+        if (referenceSample <= anchors.first().first) {
+            val first = anchors.first()
+            return first.second + (referenceSample - first.first) * rate.toDouble()
+        }
+        if (referenceSample >= anchors.last().first) {
+            val last = anchors.last()
+            return last.second + (referenceSample - last.first) * rate.toDouble()
+        }
+
+        for (i in 0 until anchors.size - 1) {
+            val a = anchors[i]
+            val b = anchors[i + 1]
+            if (referenceSample in a.first..b.first) {
+                val span = (b.first - a.first).toDouble()
+                if (span <= 0.0) return a.second.toDouble()
+                val fraction = (referenceSample - a.first) / span
+                return a.second + fraction * (b.second - a.second)
+            }
+        }
+        return referenceSample * rate.toDouble()
+    }
+
+    /** Inverse mapping: which reference sample is expected at a target position. */
+    fun referencePositionOf(targetSample: Long): Double {
+        if (anchors.isEmpty()) return targetSample / rate.toDouble()
+
+        if (targetSample <= anchors.first().second) {
+            val first = anchors.first()
+            return first.first + (targetSample - first.second) / rate.toDouble()
+        }
+        if (targetSample >= anchors.last().second) {
+            val last = anchors.last()
+            return last.first + (targetSample - last.second) / rate.toDouble()
+        }
+
+        for (i in 0 until anchors.size - 1) {
+            val a = anchors[i]
+            val b = anchors[i + 1]
+            if (targetSample in a.second..b.second) {
+                val span = (b.second - a.second).toDouble()
+                if (span <= 0.0) return a.first.toDouble()
+                val fraction = (targetSample - a.second) / span
+                return a.first + fraction * (b.first - a.first)
+            }
+        }
+        return targetSample / rate.toDouble()
+    }
+
+    companion object {
+        /** Single global rate/offset alignment, used when no anchors are available. */
+        fun global(offsetSamples: Long, rate: Float, confidence: Float): ReferenceAlignment =
+            ReferenceAlignment(listOf(0L to offsetSamples), rate, confidence)
+
+        val NONE = ReferenceAlignment()
+    }
+}
+
+/**
  * Holds a learned spectral fingerprint & dynamic STFT reference matrix
  * (either captured from an A-B time slice or loaded from a known song file).
  */
@@ -26,12 +215,46 @@ data class LearnedSpectralProfile(
     val fftSize: Int,
     val meanMagnitudeBins: FloatArray,         // Stationary 512-bin spectral print
     val peakMagnitudeBins: FloatArray,         // Peak envelope per bin
-    val dynamicStftColumns: List<FloatArray>,  // Time-varying STFT magnitude frames (for known song cancellation)
+    val dynamicReference: DynamicReference?,   // Full length time-varying reference (whole song)
     val spectrogramPreview: SpectrogramResult, // Visual spectrogram of the reference/sample
     val dominantFreqHz: Float,
     val averageDb: Float,
-    val detectedOffsetMs: Long = 0L            // Auto-correlated time offset in target recording
-)
+    val alignment: ReferenceAlignment = ReferenceAlignment.NONE
+) {
+    /** Where the reference starts in the recording, kept for reporting and manual offset. */
+    val detectedOffsetMs: Long
+        get() = alignment.anchors.firstOrNull()?.second
+            ?.let { (it.toDouble() / sampleRate * 1000).toLong() } ?: 0L
+
+    /** Rate difference in percent, 0 % means the song plays at its original speed. */
+    val driftPercent: Float get() = (alignment.rate - 1f) * 100f
+
+    /** Full length coverage in seconds, i.e. how much of the song the dynamic reference holds. */
+    val dynamicCoverageSeconds: Float
+        get() = dynamicReference?.let { (it.frames.toDouble() * it.hopSamples / sampleRate).toFloat() } ?: 0f
+
+    /**
+     * True when a time-varying reference can be used at [targetSample]: the profile came from a known
+     * song, it has dynamic frames, the match was sane and this position falls inside the song.
+     */
+    fun hasDynamicCoverageAt(targetSample: Int): Boolean {
+        val reference = dynamicReference ?: return false
+        if (sourceType != LearnedSourceType.REFERENCE_AUDIO_FILE) return false
+        if (!alignment.isReliable) return false
+        val referenceSample = alignment.referencePositionOf(targetSample.toLong())
+        return referenceSample >= 0.0 &&
+            referenceSample <= reference.frames.toDouble() * reference.hopSamples
+    }
+
+    /** Frame index inside the dynamic reference for a position in the recording, or -1 when unused. */
+    fun dynamicFrameAt(targetSample: Int): Int {
+        val reference = dynamicReference ?: return -1
+        if (!hasDynamicCoverageAt(targetSample)) return -1
+        val referenceSample = alignment.referencePositionOf(targetSample.toLong())
+        val frame = (referenceSample / reference.hopSamples).toInt()
+        return frame.coerceIn(0, reference.frames - 1)
+    }
+}
 
 /**
  * Forensic Reference Audio Canceller & Spectral Noise Print Subtractor.
@@ -84,7 +307,7 @@ class ReferenceAudioCanceller(
 
     /**
      * Step 1B: Learns a full time-varying STFT reference profile from a known song / reference audio file,
-     * and automatically calculates the best time alignment offset against the target recording.
+     * and automatically aligns it against the target recording.
      */
     fun learnFromReferenceTrack(
         referenceSamples: FloatArray,
@@ -94,60 +317,105 @@ class ReferenceAudioCanceller(
     ): LearnedSpectralProfile? {
         if (referenceSamples.size < fftSize) return null
 
+        // Align first: the alignment decides which frames of the reference are actually usable, and
+        // anchors are later used to follow a variable playback rate across the whole recording.
+        val alignment = if (targetSamples != null) {
+            alignToTarget(targetSamples, referenceSamples, referenceSampleRate)
+        } else {
+            ReferenceAlignment.NONE
+        }
+
         return buildProfileFromSamples(
             slice = referenceSamples,
             sampleRate = referenceSampleRate,
             sourceName = referenceTitle,
             sourceType = LearnedSourceType.REFERENCE_AUDIO_FILE,
-            keepDynamicFrames = true,
-            targetSamplesForAlignment = targetSamples
+            alignment = alignment
         )
     }
+
+    /**
+     * Matches the reference song inside the recording. Uses the spectral fingerprint aligner, whose
+     * anchor points let the subtraction follow a variable playback rate instead of assuming a single
+     * offset for the whole song.
+     */
+    private fun alignToTarget(
+        targetSamples: FloatArray,
+        referenceSamples: FloatArray,
+        sampleRate: Int
+    ): ReferenceAlignment {
+        val spectral = SpectralAligner.align(targetSamples, referenceSamples, sampleRate, fftSize)
+        if (spectral != null) {
+            return ReferenceAlignment(
+                anchors = listOf(spectral.offsetSamples.toLong() to spectral.offsetSamples.toLong())
+                    .takeIf { false } ?: buildAnchors(spectral),
+                rate = spectral.rate,
+                confidence = spectral.confidence
+            )
+        }
+
+        // Fallback: coarse envelope correlation, kept so a difficult recording still gets an estimate.
+        val offsetMs = findBestEnvelopeAlignmentMs(targetSamples, referenceSamples, sampleRate)
+        return ReferenceAlignment.global((offsetMs / 1000.0 * sampleRate).toLong(), 1f, 0.2f)
+    }
+
+    /**
+     * Turns the aligner result into reference -> target anchor pairs. Several anchors spread across the
+     * song are derived from the global fit and refined per segment, so interpolation between them
+     * absorbs a variable rate (a visible cut or tempo change in the middle of the song).
+     */
+    private fun buildAnchors(spectral: SpectralAlignment): List<Pair<Long, Long>> {
+        val anchors = ArrayList<Pair<Long, Long>>()
+        anchors.add(0L to spectral.offsetSamples.toLong())
+
+        // Segment lags are absolute target positions of evenly spaced reference segments; convert them
+        // into (referenceSample, targetSample) pairs for the piecewise mapping.
+        val segmentLags = spectral.segmentLags
+        if (segmentLags.size >= 2) {
+            val step = (referenceSpanSamples / segmentLags.size).coerceAtLeast(1)
+            for (index in segmentLags.indices) {
+                val referenceSample = index.toLong() * step
+                anchors.add(referenceSample to segmentLags[index].toLong())
+            }
+        }
+        return anchors.distinctBy { it.first }.sortedBy { it.first }
+    }
+
+    /** Reference length in samples for the current learn call, used to space anchor points. */
+    private var referenceSpanSamples: Int = 0
 
     private fun buildProfileFromSamples(
         slice: FloatArray,
         sampleRate: Int,
         sourceName: String,
         sourceType: LearnedSourceType,
-        keepDynamicFrames: Boolean,
-        targetSamplesForAlignment: FloatArray?
+        alignment: ReferenceAlignment = ReferenceAlignment.NONE
     ): LearnedSpectralProfile {
         val numBins = fftSize / 2
         val meanBins = FloatArray(numBins)
         val peakBins = FloatArray(numBins)
-        val dynamicColumns = ArrayList<FloatArray>()
-
-        // Limit stored dynamic frames so even very long songs stay memory-light
-        // (we store at hop = 512 for dynamic matching, up to ~8000 frames)
-        val refHop = 512
-        val totalFrames = (slice.size - fftSize).coerceAtLeast(0) / refHop + 1
-        val maxDynamicFrames = 6000
+        referenceSpanSamples = slice.size
 
         val real = FloatArray(fftSize)
         val imag = FloatArray(fftSize)
-        var frameCount = 0
 
+        // Stationary print: mean and peak magnitude per bin over the whole reference. Kept as an
+        // always-available layer because it still helps when the dynamic match is unreliable.
+        val printHop = 512
+        var frameCount = 0
         var frameIdx = 0
-        while (frameIdx * refHop + fftSize <= slice.size) {
-            val offset = frameIdx * refHop
+        while (frameIdx * printHop + fftSize <= slice.size) {
+            val offset = frameIdx * printHop
             for (i in 0 until fftSize) {
                 real[i] = slice[offset + i] * window[i]
                 imag[i] = 0f
             }
             fft.forward(real, imag)
 
-            val magCol = FloatArray(numBins)
             for (b in 0 until numBins) {
                 val mag = sqrt(real[b] * real[b] + imag[b] * imag[b])
-                magCol[b] = mag
                 meanBins[b] += mag
-                if (mag > peakBins[b]) {
-                    peakBins[b] = mag
-                }
-            }
-
-            if (keepDynamicFrames && dynamicColumns.size < maxDynamicFrames) {
-                dynamicColumns.add(magCol)
+                if (mag > peakBins[b]) peakBins[b] = mag
             }
 
             frameCount++
@@ -159,6 +427,17 @@ class ReferenceAudioCanceller(
                 meanBins[b] = meanBins[b] / frameCount
             }
         }
+
+        // Full length time-varying reference. A four minute song needs ~20k frames; quantizing to one
+        // byte of dB per bin keeps that around 10 MB instead of 42 MB, so the whole song is covered
+        // instead of only its first ~70 seconds.
+        val dynamicReference = DynamicReference.build(
+            samples = slice,
+            hopSamples = dynamicHopFor(slice.size, fftSize, DYNAMIC_FRAME_BUDGET),
+            fftSize = fftSize,
+            fft = fft,
+            window = window
+        )
 
         // Find dominant frequency & average dB
         var maxBin = 1
@@ -183,10 +462,6 @@ class ReferenceAudioCanceller(
             hopSize = 512
         )
 
-        val bestOffsetMs = if (targetSamplesForAlignment != null && sourceType == LearnedSourceType.REFERENCE_AUDIO_FILE) {
-            findBestEnvelopeAlignmentMs(targetSamplesForAlignment, slice, sampleRate)
-        } else 0L
-
         val durationMs = ((slice.size.toDouble() / sampleRate) * 1000.0).toLong()
 
         return LearnedSpectralProfile(
@@ -198,11 +473,11 @@ class ReferenceAudioCanceller(
             fftSize = fftSize,
             meanMagnitudeBins = meanBins,
             peakMagnitudeBins = peakBins,
-            dynamicStftColumns = dynamicColumns,
+            dynamicReference = dynamicReference,
             spectrogramPreview = previewSpec,
             dominantFreqHz = dominantHz,
             averageDb = avgDb,
-            detectedOffsetMs = bestOffsetMs
+            alignment = alignment
         )
     }
 
@@ -213,7 +488,7 @@ class ReferenceAudioCanceller(
      * @param profile Learned spectral fingerprint / reference song STFT profile
      * @param attenuationStrength 0.1f to 1.0f (how aggressively to remove the song/noise)
      * @param spectralMatchGain 0.5f to 2.5f (scales the reference profile to match room volume)
-     * @param timeOffsetMs Offset in ms where the reference song starts in the recording
+     * @param timeOffsetMs Manual correction added to the detected alignment, in ms
      * @param protectVoiceFormants If true, prevents over-hollowing of speech formants (300–3400 Hz)
      */
     fun applyProfileSubtraction(
@@ -221,7 +496,7 @@ class ReferenceAudioCanceller(
         profile: LearnedSpectralProfile,
         attenuationStrength: Float = 0.88f,
         spectralMatchGain: Float = 1.2f,
-        timeOffsetMs: Long = profile.detectedOffsetMs,
+        timeOffsetMs: Long = 0L,
         protectVoiceFormants: Boolean = true
     ): FloatArray {
         if (targetSamples.size < fftSize) return targetSamples.clone()
