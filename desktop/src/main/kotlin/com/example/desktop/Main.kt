@@ -554,6 +554,7 @@ private fun StudioTab(
                 onLmsPreserve = viewModel::setLmsPreserve,
                 onLearnFromAb = viewModel::learnFromAbInterval,
                 onLearnFromFile = { pickAudioFile()?.let(viewModel::learnFromReferenceFile) },
+                onAutoLearnFromMusic = viewModel::autoLearnFromDetectedMusic,
                 onApplyProfile = viewModel::applyProfile,
                 onClearProfile = viewModel::clearProfile,
                 attenuation = viewModel.attenuation.collectAsState().value,

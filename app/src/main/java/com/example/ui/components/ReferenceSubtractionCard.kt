@@ -86,6 +86,7 @@ fun ReferenceSubtractionCard(
     onLearnFromAbInterval: () -> Unit,
     onLearnFromLibraryTrack: (AudioFileItem) -> Unit,
     onLearnFromExternalUri: (android.net.Uri) -> Unit,
+    onAutoLearnFromMusic: () -> Unit,
     onClearProfile: () -> Unit,
     onAttenuationChange: (Float) -> Unit,
     onMatchGainChange: (Float) -> Unit,
@@ -288,6 +289,31 @@ fun ReferenceSubtractionCard(
                         text = "Vybrat soubor známé písničky z telefonu (.mp3 / .wav / .m4a)",
                         fontSize = 11.sp,
                         color = ForensicTextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onAutoLearnFromMusic,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(38.dp)
+                        .testTag("auto_detect_music_btn"),
+                    shape = RoundedCornerShape(10.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ForensicNeonGreen)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoFixHigh,
+                        contentDescription = null,
+                        tint = ForensicNeonGreen,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Automaticky najít hudbu v nahrávce a naučit profil",
+                        fontSize = 11.sp,
+                        color = ForensicNeonGreen,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )

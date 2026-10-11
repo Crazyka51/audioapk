@@ -333,6 +333,24 @@ class DesktopViewModel {
         }
     }
 
+    fun autoLearnFromDetectedMusic() {
+        val item = _selected.value ?: return
+        scope.launch {
+            _busy.value = true
+            val result = repository.autoLearnProfileFromDetectedMusic(File(item.filePath), item.title)
+            _profile.value = result?.profile
+            _busy.value = false
+            _message.value = when {
+                result == null -> "Nahrávku se nepodařilo analyzovat"
+                result.profile != null -> {
+                    val segment = result.analysis.bestLearningSegment()
+                    "Hudba nalezena${segment?.let { " v úseku ${it.first}-${it.second} ms" } ?: ""}; profil je připraven"
+                }
+                else -> "Hudbu v nahrávce se nepodařilo spolehlivě najít"
+            }
+        }
+    }
+
     fun applyProfile() {
         val item = _selected.value ?: return
         val learned = _profile.value ?: return

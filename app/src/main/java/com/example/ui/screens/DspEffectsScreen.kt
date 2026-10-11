@@ -139,6 +139,7 @@ fun DspEffectsScreen(
                 onLearnFromAbInterval = { viewModel.learnProfileFromAbLoop() },
                 onLearnFromLibraryTrack = { viewModel.learnProfileFromLibraryTrack(it) },
                 onLearnFromExternalUri = { viewModel.learnProfileFromExternalUri(it) },
+                onAutoLearnFromMusic = { viewModel.autoLearnProfileFromDetectedMusic() },
                 onClearProfile = { viewModel.clearLearnedProfile() },
                 onAttenuationChange = { viewModel.setReferenceAttenuation(it) },
                 onMatchGainChange = { viewModel.setReferenceMatchGain(it) },

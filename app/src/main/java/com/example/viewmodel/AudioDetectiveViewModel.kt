@@ -480,6 +480,27 @@ class AudioDetectiveViewModel(application: Application) : AndroidViewModel(appli
         }
     }
 
+    fun autoLearnProfileFromDetectedMusic() {
+        val selected = _selectedAudio.value ?: return
+        viewModelScope.launch {
+            _isLoading.value = true
+            val result = repository.autoLearnProfileFromDetectedMusic(
+                sourceFile = File(selected.filePath),
+                trackTitle = selected.title
+            )
+            _isLoading.value = false
+            _learnedProfile.value = result?.profile
+            _userMessage.value = when {
+                result == null -> "Nahrávku se nepodařilo analyzovat"
+                result.profile != null -> {
+                    val segment = result.analysis.bestLearningSegment()
+                    "Hudba nalezena${segment?.let { " v úseku ${it.first}-${it.second} ms" } ?: ""}; profil je připraven"
+                }
+                else -> "Hudbu v nahrávce se nepodařilo spolehlivě najít"
+            }
+        }
+    }
+
     fun clearLearnedProfile() {
         _learnedProfile.value = null
     }

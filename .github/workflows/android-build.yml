@@ -52,6 +52,9 @@ jobs:
       - name: Assemble debug APK
         run: gradle :app:assembleDebug --stacktrace --no-daemon
 
+      - name: Run unit tests
+        run: gradle :app:testDebugUnitTest --stacktrace --no-daemon
+
       # Makes the APK signature visible in the log, which is how you confirm the committed
       # shared debug keystore (app/debug.keystore) was used. Expected SHA-256:
       # 2b0806347966 5f3a8ae3 434d7554 2734e9b8 22718742 c4421c2d b623996d 9f10
@@ -71,15 +74,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # Unit tests are reported separately and must not block the APK artifact.
-      - name: Run unit tests
-        id: unit_tests
-        continue-on-error: true
-        run: gradle :app:testDebugUnitTest --stacktrace --no-daemon
-
       - name: Upload unit test reports
         if: always()
-        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: AudioDetective-unit-test-reports

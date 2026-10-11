@@ -65,6 +65,7 @@ fun DspRack(
     onLmsPreserve: (Float) -> Unit,
     onLearnFromAb: () -> Unit,
     onLearnFromFile: () -> Unit,
+    onAutoLearnFromMusic: () -> Unit = {},
     onApplyProfile: () -> Unit,
     onClearProfile: () -> Unit,
     onApplyCleaned: () -> Unit,
@@ -148,6 +149,7 @@ fun DspRack(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onLearnFromAb, enabled = !busy) { Text("Learn A-B") }
                 OutlinedButton(onClick = onLearnFromFile, enabled = !busy) { Text("Learn file") }
+                OutlinedButton(onClick = onAutoLearnFromMusic, enabled = !busy) { Text("Auto-detect music") }
             }
 
             // Manual tuning of the subtraction. The automatic alignment and volume match handle the

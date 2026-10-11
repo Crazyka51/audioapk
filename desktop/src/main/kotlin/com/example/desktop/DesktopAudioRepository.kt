@@ -338,6 +338,19 @@ class DesktopAudioRepository {
         }
     }
 
+    suspend fun autoLearnProfileFromDetectedMusic(
+        sourceFile: File,
+        trackTitle: String
+    ): ReferenceAudioCanceller.AutoLearnResult? = withContext(Dispatchers.Default) {
+        val raw = loadPcmSamples(sourceFile) ?: return@withContext null
+        val canceller = ReferenceAudioCanceller(fftSize = 1024, hopSize = 256, sampleRate = raw.sampleRate)
+        canceller.learnFromDetectedMusic(
+            samples = raw.samples,
+            sampleRate = raw.sampleRate,
+            trackTitle = trackTitle
+        )
+    }
+
     suspend fun generateReport(
         item: AudioFileItem,
         samples: FloatArray,

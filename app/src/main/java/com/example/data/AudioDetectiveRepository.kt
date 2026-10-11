@@ -402,6 +402,21 @@ class AudioDetectiveRepository(private val context: Context) {
         }
     }
 
+    suspend fun autoLearnProfileFromDetectedMusic(
+        sourceFile: File,
+        trackTitle: String
+    ): ReferenceAudioCanceller.AutoLearnResult? = withContext(Dispatchers.Default) {
+        val rawData = loadPcmSamples(sourceFile) ?: return@withContext null
+        val canceller = ReferenceAudioCanceller(fftSize = 1024, hopSize = 256, sampleRate = rawData.sampleRate)
+        runHeavyStep {
+            canceller.learnFromDetectedMusic(
+                samples = rawData.samples,
+                sampleRate = rawData.sampleRate,
+                trackTitle = trackTitle
+            )
+        }
+    }
+
     suspend fun subtractLearnedProfileAndSave(
         sourceFile: File,
         profile: LearnedSpectralProfile,
